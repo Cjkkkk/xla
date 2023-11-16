@@ -778,11 +778,10 @@ bool IsBmm2GradGemm2(HloInstruction* instr) {
 }
 
 MatchBwdResult MatchBmm1GradGemm1(MatchBwdResult previous_result,
-                                  HloInstruction* fwd_fmha_call,
                                   HloInstruction* bmm_1) {
   MatchBwdResult match_result = previous_result;
   match_result.has_match = false;
-  const HloInstruction* q_tensor = fwd_fmha_call->operand(0);
+  const HloInstruction* q_tensor = bmm_1->operand(0);
   for (int64_t i = 0; i < q_tensor->user_count(); i++) {
     HloInstruction* q_tensor_user_i = q_tensor->users()[i];
     if (IsBatchedMatmul(q_tensor_user_i) && q_tensor_user_i != bmm_1) {
@@ -797,8 +796,7 @@ MatchBwdResult MatchBmm1GradGemm1(MatchBwdResult previous_result,
   return match_result;
 }
 
-MatchBwdResult MatchBmm1GradGemm2(MatchBwdResult previous_result,
-                                  HloInstruction* fwd_fmha_call) {
+MatchBwdResult MatchBmm1GradGemm2(MatchBwdResult previous_result) {
   HloInstruction* bmm_1_grad_2 = nullptr;
   MatchBwdResult match_result = previous_result;
   match_result.has_match = false;
@@ -842,27 +840,24 @@ MatchBwdResult MatchBmm1GradGemm2(MatchBwdResult previous_result,
   return match_result;
 }
 
-MatchBwdResult MatchBmm2GradGemm1(HloInstruction* fwd_fmha_call) {
+MatchBwdResult MatchBmm2GradGemm1(HloInstruction* bmm_2,
+                                  HloInstruction* activation) {
   HloInstruction* bmm_2_grad_1 = nullptr;
   MatchBwdResult matched_result;
-  // The second GTE of the forward MHA call is the input of the bmm2's gradient
+  // activation is the input of the bmm2 and bmm2's gradient
   // gemm 1, we check to see if the current gemm satisfies above condition.
-  int64_t activation_out_gte_index = 1;
-  if (fwd_fmha_call->user_count() < 2 ||
-      fwd_fmha_call->users()[activation_out_gte_index]->opcode() !=
-          HloOpcode::kGetTupleElement ||
-      fwd_fmha_call->users()[activation_out_gte_index]->user_count() > 1 ||
-      !IsBatchedMatmul(
-          fwd_fmha_call->users()[activation_out_gte_index]->users()[0])) {
+  for (auto user : activation->users()) {
+    if (user != bmm_2 && IsBatchedMatmul(user)) {
+      bmm_2_grad_1 = user;
+    }
+  }
+  if (bmm_2_grad_1 == nullptr) {
     matched_result.has_match = false;
     return matched_result;
   }
-  // Found fmha->GTE->gemm, assign it to bmm_2_grad_1 and check to see if it
-  // needs canonicalization.
-  bmm_2_grad_1 = fwd_fmha_call->users()[activation_out_gte_index]->users()[0];
+  // Found bmm_2_grad_1 and check to see if it needs canonicalization.
   matched_result.matched_bmm_2_grad_1 = bmm_2_grad_1;
-  if (bmm_2_grad_1->operand_index(
-          fwd_fmha_call->users()[activation_out_gte_index]) != 0) {
+  if (bmm_2_grad_1->operand_index(activation) != 0) {
     matched_result.bmm_2_grad_1_need_canonicalization = true;
   }
 
@@ -871,18 +866,14 @@ MatchBwdResult MatchBmm2GradGemm1(HloInstruction* fwd_fmha_call) {
 }
 
 MatchBwdResult MatchBmm2GradGemm2(MatchBwdResult previous_result,
-                                  HloInstruction* fwd_fmha_call,
-                                  bool v_transposed) {
+                                  HloInstruction* bmm_2) {
   MatchBwdResult match_result = previous_result;
   match_result.has_match = false;
-  // If v tensor is transposed by forward fmha call, then we need to take fmha v
-  // input's producer's producer.
-  const HloInstruction* v_tensor = v_transposed
-                                       ? fwd_fmha_call->operand(2)->operand(0)
-                                       : fwd_fmha_call->operand(2);
+  const HloInstruction* v_tensor = bmm_2->operand(1);
   for (int64_t i = 0; i < v_tensor->user_count(); i++) {
     HloInstruction* v_tensor_user_i = v_tensor->users()[i];
-    if (IsBatchedMatmul(v_tensor_user_i) && IsBmm2GradGemm2(v_tensor_user_i)) {
+    if (v_tensor_user_i != bmm_2 && IsBatchedMatmul(v_tensor_user_i) &&
+        IsBmm2GradGemm2(v_tensor_user_i)) {
       match_result.matched_bmm_2_grad_2 = v_tensor_user_i;
       // Check for canonicalization.
       if (match_result.matched_bmm_2_grad_2->operand_index(v_tensor) != 1) {
@@ -1074,25 +1065,24 @@ MatchBwdResult MatchBwdBmmSoftmaxDropoutBmm(MatchBwdResult previous_result,
 // between.
 // Then we look for bmm1 gradient gemm1 by searching for gemms that share q
 // tensor with current fmha call.
-MatchBwdResult MatchBackwardBmms(HloInstruction* fwd_fmha_call,
-                                 HloInstruction* bmm_1, bool v_transposed) {
-  MatchBwdResult matched_result = MatchBmm2GradGemm1(fwd_fmha_call);
+MatchBwdResult MatchBackwardBmms(HloInstruction* bmm_1, HloInstruction* bmm_2,
+                                 HloInstruction* activation) {
+  MatchBwdResult matched_result = MatchBmm2GradGemm1(bmm_2, activation);
   if (!matched_result.has_match) {
     return matched_result;
   }
 
-  matched_result =
-      MatchBmm2GradGemm2(matched_result, fwd_fmha_call, v_transposed);
+  matched_result = MatchBmm2GradGemm2(matched_result, bmm_2);
   if (!matched_result.has_match) {
     return matched_result;
   }
 
-  matched_result = MatchBmm1GradGemm1(matched_result, fwd_fmha_call, bmm_1);
+  matched_result = MatchBmm1GradGemm1(matched_result, bmm_1);
   if (!matched_result.has_match) {
     return matched_result;
   }
 
-  matched_result = MatchBmm1GradGemm2(matched_result, fwd_fmha_call);
+  matched_result = MatchBmm1GradGemm2(matched_result);
   if (!matched_result.has_match) {
     return matched_result;
   }
@@ -1101,10 +1091,9 @@ MatchBwdResult MatchBackwardBmms(HloInstruction* fwd_fmha_call,
 // We will match the backward graphs for all forward patterns defined in
 // MatchFwdMHAPatternsForCanonicalization
 MatchBwdResult MatchBwdMHAPatternsForCanonicalization(
-    HloInstruction* fwd_fmha_call, HloInstruction* bmm_1, HloInstruction* mask,
-    bool v_transposed) {
-  MatchBwdResult match_result =
-      MatchBackwardBmms(fwd_fmha_call, bmm_1, v_transposed);
+    HloInstruction* fwd_fmha_call, HloInstruction* bmm_1, HloInstruction* bmm_2,
+    HloInstruction* activation, HloInstruction* mask) {
+  MatchBwdResult match_result = MatchBackwardBmms(bmm_1, bmm_2, activation);
   if (!match_result.has_match) {
     return match_result;
   }
@@ -1278,14 +1267,16 @@ StatusOr<HloInstruction*> FuseFwdMultiHeadedAttentionBlock(
     HloComputation* comp, HloInstruction* bmm_1, HloInstruction* bmm_2,
     HloInstruction* bias, HloInstruction* mask, HloInstruction* scale,
     HloInstruction* reduce_sum, HloInstruction* softmax_input,
-    double dropout_rate, std::string& custom_call_name,
-    stream_executor::CudaComputeCapability cc, bool is_training, bool& changed,
-    bool& v_transposed, bool is_causal_mask, bool is_flash_attention) {
+    HloInstruction** activation, double dropout_rate,
+    std::string& custom_call_name, stream_executor::CudaComputeCapability cc,
+    bool is_training, bool& changed, bool is_causal_mask,
+    bool is_flash_attention) {
   double scale_value = 1.0;
   HloInstruction* lhs_bmm1;
   HloInstruction* rhs_bmm1;
   HloInstruction* rhs_bmm2;
-  DotDimensionNumbers bmm1dot = bmm_1->dot_dimension_numbers();
+  DotDimensionNumbers orig_bmm1_dot_dim = bmm_1->dot_dimension_numbers();
+  DotDimensionNumbers orig_bmm2_dot_dim = bmm_2->dot_dimension_numbers();
   TF_ASSIGN_OR_RETURN(rhs_bmm1, ChangeCheckedDimToFastest(
                                     comp, bmm_1, false /*is_lhs*/,
                                     true /*should_contracting_be_fastest*/));
@@ -1297,17 +1288,15 @@ StatusOr<HloInstruction*> FuseFwdMultiHeadedAttentionBlock(
                                     comp, bmm_2, false /*is_lhs*/,
                                     false /*should_contracting_be_fastest*/));
 
-  if (rhs_bmm2 != bmm_2->mutable_operand(1)) {
-    v_transposed = true;
-  }
-
   CudnnfMHABackendConfig fmha_config;
   *fmha_config.mutable_bmm1_dot_dimension_numbers() =
       bmm_1->dot_dimension_numbers();
   *fmha_config.mutable_bmm2_dot_dimension_numbers() =
       bmm_2->dot_dimension_numbers();
   *((DynCast<HloDotInstruction>(bmm_1))->mutable_dot_dimension_numbers()) =
-      bmm1dot;
+      orig_bmm1_dot_dim;
+  *((DynCast<HloDotInstruction>(bmm_2))->mutable_dot_dimension_numbers()) =
+      orig_bmm2_dot_dim;
   TF_RET_CHECK((dropout_rate >= 0.0 && dropout_rate <= 1.0));
 
   // If scale node is assigned, extract value from it.
@@ -1379,6 +1368,7 @@ StatusOr<HloInstruction*> FuseFwdMultiHeadedAttentionBlock(
         return InternalError("Unexpected activation patterns");
       }
     }
+    *activation = activation_output;
     // if it is flash attention, should output softmax stats to the bwd
     if (is_flash_attention) {
       TF_RET_CHECK(reduce_sum != nullptr);
@@ -1444,54 +1434,11 @@ StatusOr<HloInstruction*> FuseFwdMultiHeadedAttentionBlock(
   TF_RETURN_IF_ERROR(fmha_call->set_backend_config(fmha_config));
   TF_RETURN_IF_ERROR(SetFMHAInstructionName(bmm_1->GetModule(), fmha_call));
 
-  TF_RETURN_IF_ERROR(comp->ReplaceWithNewInstruction(
-      bmm_2,
-      HloInstruction::CreateGetTupleElement(bmm_2->shape(), fmha_call, 0)));
-
-  if (activation_output) {
-    TF_RETURN_IF_ERROR(comp->ReplaceWithNewInstruction(
-        activation_output, HloInstruction::CreateGetTupleElement(
-                               activation_output->shape(), fmha_call, 2)));
-  }
-
   if (VLOG_IS_ON(2)) {
     VLOG(2) << "After CudnnFusedMHARewriter: \n" << comp->parent()->ToString();
   }
   changed = true;
   return fmha_call;
-}
-
-Status RematSoftmaxOutput(HloComputation* comp, HloInstruction* fwd_fmha_call,
-                          HloInstruction* softmax_input) {
-  // if only flash fwd is matched and bwd is not matched, then we need to remat
-  // the real softmax output because flash fwd only output softmax stat tensor
-  // following computation recovers the softmax output
-  // s = sub(softmax_input, broadcast(softmax_stat))
-  // r = exp(s)
-  // find the softmax stat tensor
-  HloInstruction* softmax_stat;
-  for (auto user : fwd_fmha_call->users()) {
-    if (user->opcode() == HloOpcode::kGetTupleElement &&
-        user->tuple_index() == 2) {
-      softmax_stat = user;
-    }
-  }
-  // should be able to find the softmax stat
-  TF_RET_CHECK(softmax_stat != nullptr);
-  auto broadcast = comp->AddInstruction(HloInstruction::CreateBroadcast(
-      softmax_input->shape(), softmax_stat, {0, 1, 2}));
-  auto sub = comp->AddInstruction(HloInstruction::CreateBinary(
-      softmax_input->shape(), HloOpcode::kSubtract, softmax_input, broadcast));
-  auto exp = comp->AddInstruction(HloInstruction::CreateUnary(
-      softmax_input->shape(), HloOpcode::kExp, sub));
-  // convert fp32 to bf16/fp16
-  // we use datatype of Q tensor here
-  auto new_shape = ShapeUtil::ChangeElementType(
-      softmax_input->shape(),
-      fwd_fmha_call->operand(0)->shape().element_type());
-  TF_RETURN_IF_ERROR(comp->ReplaceWithNewInstruction(
-      softmax_stat, HloInstruction::CreateConvert(new_shape, exp)));
-  return OkStatus();
 }
 
 bool IsDbiasOnlyUserBesidesGradGemm(HloInstruction* d_intermediate,
@@ -1531,6 +1478,15 @@ StatusOr<bool> FuseBwdMultiHeadedAttentionBlock(
   HloInstruction* rhs_bmm2_grad_gemm2;
   HloInstruction* d_output_grad;
   HloInstruction* fwd_act;
+
+  DotDimensionNumbers orig_bmm1_grad1_config =
+      bmm_1_grad_1->dot_dimension_numbers();
+  DotDimensionNumbers orig_bmm1_grad2_config =
+      bmm_1_grad_2->dot_dimension_numbers();
+  DotDimensionNumbers orig_bmm2_grad1_config =
+      bmm_2_grad_1->dot_dimension_numbers();
+  DotDimensionNumbers orig_bmm2_grad2_config =
+      bmm_2_grad_2->dot_dimension_numbers();
 
   TF_ASSIGN_OR_RETURN(CudnnfMHABackendConfig fwd_config,
                       fwd_fmha_call->backend_config<CudnnfMHABackendConfig>());
@@ -1623,6 +1579,16 @@ StatusOr<bool> FuseBwdMultiHeadedAttentionBlock(
       bmm_2_grad_1->dot_dimension_numbers();
   *bwd_fmha_config.mutable_bmm2_grad_gemm2_dot_dimension_numbers() =
       bmm_2_grad_2->dot_dimension_numbers();
+
+  // Restore original DotDimensionNumbers
+  *((DynCast<HloDotInstruction>(bmm_1_grad_1))
+        ->mutable_dot_dimension_numbers()) = orig_bmm1_grad1_config;
+  *((DynCast<HloDotInstruction>(bmm_1_grad_2))
+        ->mutable_dot_dimension_numbers()) = orig_bmm1_grad2_config;
+  *((DynCast<HloDotInstruction>(bmm_2_grad_1))
+        ->mutable_dot_dimension_numbers()) = orig_bmm2_grad1_config;
+  *((DynCast<HloDotInstruction>(bmm_2_grad_2))
+        ->mutable_dot_dimension_numbers()) = orig_bmm2_grad2_config;
 
   bwd_fmha_config.set_fmha_scale(fwd_config.fmha_scale());
   bwd_fmha_config.set_dropout_rate(fwd_config.dropout_rate());
@@ -1731,6 +1697,25 @@ StatusOr<bool> FuseBwdMultiHeadedAttentionBlock(
   }
   return true;
 }
+
+// replace Bmm2 and activation that is used by bwd with fwd fmha call
+// We saparate this logic from FuseFwdMultiHeadedAttentionBlock call
+// So we can make sure we only replace fwd call if
+// 1. it is inference, we replace after matched
+// 2. it is training, we replace after bwd is also matched
+Status ReplaceWithFwdFMHA(HloComputation* comp, HloInstruction* fmha_call,
+                          HloInstruction* bmm_2, HloInstruction* activation) {
+  TF_RETURN_IF_ERROR(comp->ReplaceWithNewInstruction(
+      bmm_2,
+      HloInstruction::CreateGetTupleElement(bmm_2->shape(), fmha_call, 0)));
+
+  if (activation) {
+    TF_RETURN_IF_ERROR(comp->ReplaceWithNewInstruction(
+        activation, HloInstruction::CreateGetTupleElement(activation->shape(),
+                                                          fmha_call, 2)));
+  }
+  return OkStatus();
+}
 }  // namespace
 
 StatusOr<bool> CudnnFusedMHARewriter::Run(
@@ -1750,7 +1735,6 @@ StatusOr<bool> CudnnFusedMHARewriter::Run(
       return false;
     }
     for (HloInstruction* instr : comp->MakeInstructionPostOrder()) {
-      bool v_transposed = false;
       bool changed = false;
       MatchFwdResult matched_result =
           MatchFwdMHAPatternsForCanonicalization(instr);
@@ -1776,6 +1760,9 @@ StatusOr<bool> CudnnFusedMHARewriter::Run(
       matched_bmm1.insert(matched_result.matched_bmm_1);
       // If we need to canonicalize the bmm, we will assign the newly
       // canonicalized bmm to bmm_2.
+      // we keep track of bmm_2 before canonicalization so we can undo this
+      // later if we decide not to fuse fwd.
+      auto original_bmm2 = matched_result.matched_bmm_2;
       if (matched_result.need_canonicalization) {
         TF_ASSIGN_OR_RETURN(matched_result.matched_bmm_2,
                             CanonicalizeBatchedGemmForcuDNNFMHA(
@@ -1784,43 +1771,58 @@ StatusOr<bool> CudnnFusedMHARewriter::Run(
 
       // Fuse the bmms and intermediate nodes into fMHA call, the fused call
       // will replace bmm_2.
+      HloInstruction* activation = nullptr;
       TF_ASSIGN_OR_RETURN(
           HloInstruction * fwd_fmha_call,
           FuseFwdMultiHeadedAttentionBlock(
               comp, matched_result.matched_bmm_1, matched_result.matched_bmm_2,
               matched_result.matched_bias, matched_result.matched_mask,
               matched_result.matched_scale, matched_result.matched_reduce_sum,
-              matched_result.matched_softmax_input,
+              matched_result.matched_softmax_input, &activation,
               matched_result.matched_dropout_rate,
               matched_result.matched_custom_call_name, compute_capability_,
-              matched_result.is_training, changed, v_transposed,
+              matched_result.is_training, changed,
               matched_result.is_causal_mask,
               matched_result.is_flash_attention));
-      any_changed |= changed;
+      if (!matched_result.is_training) {
+        // If it is inference, we replace bmm_2 here
+        // otherwise, we replace after making sure bwd is also matched
+        TF_RETURN_IF_ERROR(ReplaceWithFwdFMHA(
+            comp, fwd_fmha_call, matched_result.matched_bmm_2, nullptr));
+        any_changed |= changed;
+      }
       if (matched_result.is_training) {
+        MatchBwdResult matched_bwd_result =
+            MatchBwdMHAPatternsForCanonicalization(
+                fwd_fmha_call, matched_result.matched_bmm_1,
+                matched_result.matched_bmm_2, activation,
+                matched_result.matched_mask);
+        if (!matched_bwd_result.has_match) {
+          if (matched_result.need_canonicalization) {
+            // we need to undo bmm2 canonicalization here since we already
+            // changed the graph
+            TF_RET_CHECK(matched_result.matched_bmm_2->user_count() == 1);
+            auto transpose = matched_result.matched_bmm_2->users()[0];
+            // Swap P and V here
+            std::vector<HloInstruction*> operands{
+                matched_result.matched_bmm_2->operands()[1],
+                matched_result.matched_bmm_2->operands()[0]};
+            // create uncanonicalized bmm2 here
+            std::unique_ptr<HloInstruction> bmm2 =
+                original_bmm2->CloneWithNewOperands(original_bmm2->shape(),
+                                                    operands);
+            TF_RETURN_IF_ERROR(
+                comp->ReplaceWithNewInstruction(transpose, std::move(bmm2)));
+          }
+          any_changed |= changed;
+          continue;
+        }
         // if fwd uses mask input, then bwd needs cudnn 8.9.1 to take in a mask
         // input if cudnn version < 8.9.1 we won't lower the bwd pass
         if (matched_result.matched_mask != nullptr &&
             !IsComputeCapabilityAndCudnnSupported(
                 compute_capability_, cudnn_version_, stream_executor_,
                 stream_executor::dnn::VersionInfo(8, 9, 1))) {
-          continue;
-        }
-        MatchBwdResult matched_bwd_result =
-            MatchBwdMHAPatternsForCanonicalization(
-                fwd_fmha_call, matched_result.matched_bmm_1,
-                matched_result.matched_mask, v_transposed);
-        if (!matched_bwd_result.has_match) {
-          if (matched_result.is_flash_attention) {
-            // if only flash fwd is matched but bwd is not matched, we need to
-            // remat the softmax output from softmax stat for bwd to user,
-            // otherwise bwd will fail. if both flash fwd and bwd is matched,
-            // don't do this because flash bwd will remat itself.
-            TF_RETURN_IF_ERROR(RematSoftmaxOutput(
-                comp, fwd_fmha_call, matched_result.matched_softmax_input));
-            VLOG(2) << "Only flash attention fwd is matched, rematerialize "
-                       "softmax output for bwd.";
-          }
           continue;
         }
         // check if dbias is the only user of d_intermediate besides
@@ -1864,7 +1866,10 @@ StatusOr<bool> CudnnFusedMHARewriter::Run(
                   matched_bwd_result.matched_bmm_2_grad_2, comp));
         }
 
-        // Fuse the corresponding gradient graph to an fMHA fused call.s
+        // we replace bmm2 after making sure bwd is also matched
+        TF_RETURN_IF_ERROR(ReplaceWithFwdFMHA(
+            comp, fwd_fmha_call, matched_result.matched_bmm_2, activation));
+        // Fuse the corresponding gradient graph to an fMHA fused call.
         TF_ASSIGN_OR_RETURN(
             changed,
             FuseBwdMultiHeadedAttentionBlock(
