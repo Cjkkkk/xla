@@ -1335,8 +1335,7 @@ StatusOr<HloInstruction*> FuseFwdMultiHeadedAttentionBlock(
       bmm_1->dot_dimension_numbers();
   *fmha_config.mutable_bmm2_dot_dimension_numbers() =
       bmm_2->dot_dimension_numbers();
-  *((DynCast<HloDotInstruction>(bmm_1))->mutable_dot_dimension_numbers()) =
-      bmm1dot;
+
   TF_RET_CHECK((dropout_rate >= 0.0 && dropout_rate <= 1.0));
   // Restore original DotDimensionNumbers.
   *((DynCast<HloDotInstruction>(bmm_1))->mutable_dot_dimension_numbers()) =
