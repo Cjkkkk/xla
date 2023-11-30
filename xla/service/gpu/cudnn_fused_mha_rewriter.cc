@@ -1500,39 +1500,6 @@ StatusOr<HloInstruction*> FuseFwdMultiHeadedAttentionBlock(
   return fmha_call;
 }
 
-Status RematSoftmaxOutput(HloComputation* comp, HloInstruction* fwd_fmha_call,
-                          HloInstruction* softmax_input) {
-  // if only flash fwd is matched and bwd is not matched, then we need to remat
-  // the real softmax output because flash fwd only output softmax stat tensor
-  // following computation recovers the softmax output
-  // s = sub(softmax_input, broadcast(softmax_stat))
-  // r = exp(s)
-  // find the softmax stat tensor
-  HloInstruction* softmax_stat;
-  for (auto user : fwd_fmha_call->users()) {
-    if (user->opcode() == HloOpcode::kGetTupleElement &&
-        user->tuple_index() == 2) {
-      softmax_stat = user;
-    }
-  }
-  // should be able to find the softmax stat
-  TF_RET_CHECK(softmax_stat != nullptr);
-  auto broadcast = comp->AddInstruction(HloInstruction::CreateBroadcast(
-      softmax_input->shape(), softmax_stat, {0, 1, 2}));
-  auto sub = comp->AddInstruction(HloInstruction::CreateBinary(
-      softmax_input->shape(), HloOpcode::kSubtract, softmax_input, broadcast));
-  auto exp = comp->AddInstruction(HloInstruction::CreateUnary(
-      softmax_input->shape(), HloOpcode::kExp, sub));
-  // convert fp32 to bf16/fp16
-  // we use datatype of Q tensor here
-  auto new_shape = ShapeUtil::ChangeElementType(
-      softmax_input->shape(),
-      fwd_fmha_call->operand(0)->shape().element_type());
-  TF_RETURN_IF_ERROR(comp->ReplaceWithNewInstruction(
-      softmax_stat, HloInstruction::CreateConvert(new_shape, exp)));
-  return OkStatus();
-}
-
 bool IsDbiasOnlyUserBesidesGradGemm(HloInstruction* d_intermediate,
                                     HloInstruction* bmm_1_grad_1,
                                     HloInstruction* bmm_1_grad_2,
@@ -1789,6 +1756,39 @@ StatusOr<bool> FuseBwdMultiHeadedAttentionBlock(
   }
   return true;
 }
+
+Status RestoreFwdGraph(HloComputation* comp, HloInstruction* fwd_fmha_call,
+                       HloInstruction* bmm2, HloInstruction* activation,
+                       HloInstruction* original_bmm2_producer0,
+                       HloInstruction* original_bmm2_producer1,
+                       std::vector<HloInstruction*>& original_activation_producers) {
+  // If backward pattern is not matched, we need to restore the
+  // original graph structure.
+  // Replacing new GTEs added by forward FMHA call with cloned old
+  // activations and bmm2.
+  HloInstruction* output_gte = fwd_fmha_call->users()[0];
+  HloInstruction* activation_gte = fwd_fmha_call->users()[1];
+  std::string suffix = "fmha_no_match_clone";
+  HloInstruction* cloned_activation =
+      comp->AddInstruction(activation->CloneWithNewOperands(
+          activation->shape(), original_activation_producers, suffix));
+
+  // Since old activation is detached by forward FMHA rewrite, we need
+  // to use the newly cloned activation.
+  HloInstruction* lhs = activation == original_bmm2_producer0
+                            ? cloned_activation
+                            : original_bmm2_producer1;
+  HloInstruction* rhs = activation == original_bmm2_producer0
+                            ? original_bmm2_producer1
+                            : cloned_activation;
+  HloInstruction* cloned_bmm2 = comp->AddInstruction(
+      bmm2->CloneWithNewOperands(bmm2->shape(), {lhs, rhs}, suffix));
+
+  TF_RETURN_IF_ERROR(comp->ReplaceInstruction(output_gte, cloned_bmm2));
+  TF_RETURN_IF_ERROR(
+      comp->ReplaceInstruction(activation_gte, cloned_activation));
+  return OkStatus();
+}
 }  // namespace
 
 StatusOr<bool> CudnnFusedMHARewriter::Run(
@@ -1815,7 +1815,6 @@ StatusOr<bool> CudnnFusedMHARewriter::Run(
       if (!matched_result.has_match) {
         continue;
       }
-      // flash attention TODO: dont fuse fwd if bwd is not supported
       // We check the validity of bmms here before canonicalization so we don't
       // modify the graph if mha fusion is not possible
       // Relax 512 constraint if it is flash attention
@@ -1828,6 +1827,15 @@ StatusOr<bool> CudnnFusedMHARewriter::Run(
               matched_result.matched_custom_call_name, debug_options));
 
       if (!is_mha_module_supported) continue;
+      // flash attention require cuDNN 8.9.3 to run non-fused QKV
+      // once we have fused QKV support, we can relax this contraint
+      if (matched_result.is_flash_attention &&
+          !IsComputeCapabilityAndCudnnSupported(
+                compute_capability_, cudnn_version_, stream_executor_,
+                stream_executor::dnn::VersionInfo(8, 9, 3))) {
+        VLOG(2) << "Require cuDNN 8.9.3 to run flash attention.";
+        continue;
+      }
       // If we have an activation with more than 1 users in non-training mode,
       // we cannot rewrite the graph. So skip processing the rest.
       HloInstruction* activation =
@@ -1877,46 +1885,30 @@ StatusOr<bool> CudnnFusedMHARewriter::Run(
               matched_result.is_flash_attention));
       any_changed |= changed;
       if (matched_result.is_training) {
-        // if fwd uses mask input, then bwd needs cudnn 8.9.1 to take in a mask
-        // input if cudnn version < 8.9.1 we won't lower the bwd pass
-        if (matched_result.matched_mask != nullptr &&
-            !IsComputeCapabilityAndCudnnSupported(
-                compute_capability_, cudnn_version_, stream_executor_,
-                stream_executor::dnn::VersionInfo(8, 9, 1))) {
-          continue;
-        }
         MatchBwdResult matched_bwd_result =
             MatchBwdMHAPatternsForCanonicalization(
                 fwd_fmha_call, matched_result.matched_bmm_1,
                 matched_result.matched_mask, v_transposed);
         if (!matched_bwd_result.has_match) {
           VLOG(2) << "Backward pattern not matching, skipping.";
-          // If backward pattern is not matched, we need to restore the
-          // original graph structure.
-          // Replacing new GTEs added by forward FMHA call with cloned old
-          // activations and bmm2.
-          HloInstruction* output_gte = fwd_fmha_call->users()[0];
-          HloInstruction* activation_gte = fwd_fmha_call->users()[1];
-          std::string suffix = "fmha_no_match_clone";
-          HloInstruction* cloned_activation =
-              comp->AddInstruction(activation->CloneWithNewOperands(
-                  activation->shape(), original_activation_producers, suffix));
-
-          // Since old activation is detached by forward FMHA rewrite, we need
-          // to use the newly cloned activation.
-          HloInstruction* lhs = activation == original_bmm2_producer0
-                                    ? cloned_activation
-                                    : original_bmm2_producer1;
-          HloInstruction* rhs = activation == original_bmm2_producer0
-                                    ? original_bmm2_producer1
-                                    : cloned_activation;
-          HloInstruction* cloned_bmm2 = comp->AddInstruction(
-              matched_result.matched_bmm_2->CloneWithNewOperands(
-                  matched_result.matched_bmm_2->shape(), {lhs, rhs}, suffix));
-
-          TF_RETURN_IF_ERROR(comp->ReplaceInstruction(output_gte, cloned_bmm2));
+          // restore fwd graph if bwd pattern match failed
           TF_RETURN_IF_ERROR(
-              comp->ReplaceInstruction(activation_gte, cloned_activation));
+            RestoreFwdGraph(comp, fwd_fmha_call, matched_result.matched_bmm_2,
+              activation, original_bmm2_producer0, original_bmm2_producer1,
+              original_activation_producers));
+          continue;
+        }
+        // if fwd uses mask input, then bwd needs cudnn 8.9.1 to take in a mask
+        // input if cudnn version < 8.9.1 we won't lower the bwd pass
+        if (matched_result.matched_mask != nullptr &&
+            !IsComputeCapabilityAndCudnnSupported(
+                compute_capability_, cudnn_version_, stream_executor_,
+                stream_executor::dnn::VersionInfo(8, 9, 1))) {
+          // restore fwd graph if bwd pattern match failed
+          TF_RETURN_IF_ERROR(
+            RestoreFwdGraph(comp, fwd_fmha_call, matched_result.matched_bmm_2,
+              activation, original_bmm2_producer0, original_bmm2_producer1,
+              original_activation_producers));
           continue;
         }
         // check if dbias is the only user of d_intermediate besides
@@ -1932,6 +1924,11 @@ StatusOr<bool> CudnnFusedMHARewriter::Run(
             !IsComputeCapabilityAndCudnnSupported(
                 compute_capability_, cudnn_version_, stream_executor_,
                 stream_executor::dnn::VersionInfo(8, 9, 1))) {
+          // restore fwd graph if bwd pattern match failed
+          TF_RETURN_IF_ERROR(
+            RestoreFwdGraph(comp, fwd_fmha_call, matched_result.matched_bmm_2,
+              activation, original_bmm2_producer0, original_bmm2_producer1,
+              original_activation_producers));
           continue;
         }
         // Canonicalize gemms
