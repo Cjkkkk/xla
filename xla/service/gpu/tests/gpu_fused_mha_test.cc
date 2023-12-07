@@ -2407,13 +2407,8 @@ class FlashAttentionBMMScaleCausalMaskSoftmaxBMM
     auto rhs_bmm2_literal =
         GetInput4DLiteral<T>({2, 6, 2048, 128}, {3, 2, 1, 0});
     std::string hlo_string = "";
-    if (std::is_same<T, Eigen::half>::value) {
-      //
-    } else if (std::is_same<T, bfloat16>::value) {
-      hlo_string =
-          GetModuleFlash_Attention_BMM1_CausalMask_Softmax_BMM2_HloString_BF16();
-    }
-
+    hlo_string =
+        GetModuleFlash_Attention_BMM1_CausalMask_Softmax_BMM2_HloString_BF16();
     ExecuteAndCompare(
         hlo_string, {&lhs_bmm1_literal, &rhs_bmm1_literal, &rhs_bmm2_literal});
   }
@@ -2438,13 +2433,8 @@ class FlashAttentionBMMScaleCausalMaskSoftmaxBMM
     auto do_literal =
         GetInput4DLiteral<T>({2, 6, 1024, 64}, {3, 2, 1, 0});
     std::string hlo_string = "";
-    if (std::is_same<T, Eigen::half>::value) {
-      //
-    } else if (std::is_same<T, bfloat16>::value) {
-      hlo_string =
-          GetModuleFlash_Attention_Training_BMM1_CausalMask_Softmax_BMM2_HloString_BF16();
-    }
-
+    hlo_string =
+        GetModuleFlash_Attention_Training_BMM1_CausalMask_Softmax_BMM2_HloString_BF16();
     ExecuteAndCompare(
         hlo_string, {&lhs_bmm1_literal, &rhs_bmm1_literal, &rhs_bmm2_literal, &do_literal}, true);
   }
@@ -2609,13 +2599,8 @@ class FlashAttentionBMMScaleBiasSoftmaxBMM : public MultiHeadedAttentionTest {
         GetInput4DLiteral<T>({2, 6, 2048, 128}, {3, 2, 1, 0});
     auto bias_literal = GetInput4DLiteral<T>({2, 6, 2048, 2048}, {3, 2, 1, 0});
     std::string hlo_string = "";
-    if (std::is_same<T, Eigen::half>::value) {
-      //
-    } else if (std::is_same<T, bfloat16>::value) {
-      hlo_string =
-          GetModuleFlash_Attention_BMM1_Bias_Softmax_BMM2_HloString_BF16();
-    }
-
+    hlo_string =
+        GetModuleFlash_Attention_BMM1_Bias_Softmax_BMM2_HloString_BF16();
     ExecuteAndCompare(hlo_string, {&lhs_bmm1_literal, &rhs_bmm1_literal,
                                    &rhs_bmm2_literal, &bias_literal});
   }
@@ -2639,13 +2624,8 @@ class FlashAttentionBMMScaleBiasSoftmaxBMM : public MultiHeadedAttentionTest {
     auto bias_literal = GetInput4DLiteral<T>({2, 6, 1024, 1024}, {3, 2, 1, 0});
     auto do_literal = GetInput4DLiteral<T>({2, 6, 1024, 64}, {3, 2, 1, 0});
     std::string hlo_string = "";
-    if (std::is_same<T, Eigen::half>::value) {
-      //
-    } else if (std::is_same<T, bfloat16>::value) {
-      hlo_string =
-          GetModuleFlash_Attention_Training_BMM1_Bias_Softmax_BMM2_HloString_BF16();
-    }
-
+    hlo_string =
+        GetModuleFlash_Attention_Training_BMM1_Bias_Softmax_BMM2_HloString_BF16();
     ExecuteAndCompare(hlo_string, {&lhs_bmm1_literal, &rhs_bmm1_literal,
                                    &rhs_bmm2_literal, &bias_literal, &do_literal}, true);
   }
