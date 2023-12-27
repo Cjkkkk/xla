@@ -675,6 +675,14 @@ MatchFwdResult MatchBmm1UnfusedBiasSoftmaxBmm2(MatchFwdResult previous_result,
                        m::Op(&bias))))) {
     match_result.matched_bmm_1 = bmm_1;
     match_result.matched_scale = scale;
+    if (bias->opcode() == HloOpcode::kBroadcast) {
+      // we can take the bias before broadcast
+      auto dims = Cast<HloBroadcastInstruction>(bias)->dimensions();
+      // cuDNN accepts bias broadcast at batch dim
+      if (dims.size() == 3 && dims[0] == 1 && dims[1] == 2 && dims[2] == 3) {
+        bias = bias->mutable_operand(0);
+      }
+    }
     match_result.matched_bias = bias;
     match_result.matched_custom_call_name =
         has_dropout ? kCudnnfMHAScaleBiasSoftmaxDropoutCallTarget

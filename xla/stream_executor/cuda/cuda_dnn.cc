@@ -3860,13 +3860,14 @@ tsl::StatusOr<cudnn_frontend::Tensor> CreateCudnnScaleTensor(
 
 // Returns a cudnn tensor that's the output of the bias addition op
 tsl::StatusOr<cudnn_frontend::Tensor> CreateCudnnBiasTensor(
-    std::vector<cudnn_frontend::Operation>& ops, absl::Span<const int64_t> dims,
+    std::vector<cudnn_frontend::Operation>& ops, absl::Span<const int64_t> bias_dims,
+    absl::Span<const int64_t> bias_strides, absl::Span<const int64_t> dims,
     absl::Span<const int64_t> strides, dnn::DataType dtype,
     cudnn_frontend::Tensor& input_tensor, bool use_mask) {
   // Create the bias tensor.
   TF_ASSIGN_OR_RETURN(
       auto bias_tensor,
-      CreateCudnnTensor(dims, strides, CudnnfMHAUid::BIAS_ID, dtype, 1, -1));
+      CreateCudnnTensor(bias_dims, bias_strides, CudnnfMHAUid::BIAS_ID, dtype, 1, -1));
 
   // Create the bias output tensor
   dnn::DataType bias_out_type = use_mask ? dtype : dnn::DataType::kFloat;
@@ -5290,9 +5291,16 @@ GetCudnnFusedMHAOperationGraph(
     if (use_bias) {
       // Create bias op and tensor
       DCHECK(bias_descriptor != std::nullopt);
+      std::vector<int64_t> bias_dims = (*bias_descriptor).dimensions();
+      std::vector<int64_t> bias_strides = (*bias_descriptor).GetLogicalStrides();
+      if (bias_dims.size() == 3) {
+        bias_dims.insert(bias_dims.begin(), 1);
+        bias_strides.insert(bias_strides.begin(), bias_dims[1] * bias_strides[0]);
+      }
       TF_ASSIGN_OR_RETURN(
           auto bias_out,
-          CreateCudnnBiasTensor(intermediate_ops, intermediate_bmm2_lhs_dims,
+          CreateCudnnBiasTensor(intermediate_ops, bias_dims, bias_strides,
+                                intermediate_bmm2_lhs_dims,
                                 intermediate_bmm2_lhs_strides,
                                 (*bias_descriptor).type(), bmm2_input_tensor,
                                 use_mask));
@@ -6153,13 +6161,14 @@ GetCudnnFusedMHABackwardOperationGraph(
 
 // Returns a cudnn tensor that's the output of the bias addition op
 tsl::StatusOr<cudnn_frontend::Tensor> CreateCudnnFlashAttentionBiasFwdTensor(
-    std::vector<cudnn_frontend::Operation>& ops, absl::Span<const int64_t> dims,
+    std::vector<cudnn_frontend::Operation>& ops, absl::Span<const int64_t> bias_dims,
+    absl::Span<const int64_t> bias_strides, absl::Span<const int64_t> dims,
     absl::Span<const int64_t> strides, dnn::DataType dtype,
     cudnn_frontend::Tensor& input_tensor) {
   // Create the bias tensor.
   TF_ASSIGN_OR_RETURN(
       auto bias_tensor,
-      CreateCudnnTensor(dims, strides, CudnnfMHAUid::BIAS_ID, dtype, 1, -1));
+      CreateCudnnTensor(bias_dims, bias_strides, CudnnfMHAUid::BIAS_ID, dtype, 1, -1));
 
   // Create the bias output tensor
   TF_ASSIGN_OR_RETURN(
@@ -6665,9 +6674,16 @@ GetCudnnFlashAttentionOperationGraph(
 
   if (use_bias) {
     // Create bias op and tensor
+    std::vector<int64_t> bias_dims = (*bias_descriptor).dimensions();
+    std::vector<int64_t> bias_strides = (*bias_descriptor).GetLogicalStrides();
+    if (bias_dims.size() == 3) {
+      bias_dims.insert(bias_dims.begin(), 1);
+      bias_strides.insert(bias_strides.begin(), bias_dims[1] * bias_strides[0]);
+    }
     TF_ASSIGN_OR_RETURN(auto bias_out,
                         CreateCudnnFlashAttentionBiasFwdTensor(
-                            intermediate_ops, intermediate_bmm2_lhs_dims,
+                            intermediate_ops, bias_dims, bias_strides,
+                            intermediate_bmm2_lhs_dims,
                             intermediate_bmm2_lhs_strides,
                             (*bias_descriptor).type(), bmm2_input_tensor));
     bmm2_input_tensor = std::move(bias_out);
@@ -6876,7 +6892,8 @@ GetCudnnFlashAttentionBackwardOperationGraph(
     const dnn::MatmulTensorDescriptor& d_output_descriptor,
     const dnn::TensorDescriptor& d_bmm1_lhs_descriptor,
     const dnn::TensorDescriptor& d_bmm1_rhs_descriptor,
-    const dnn::TensorDescriptor& d_bmm2_rhs_descriptor, dnn::FusedMHAKind kind,
+    const dnn::TensorDescriptor& d_bmm2_rhs_descriptor,
+    std::optional<dnn::TensorDescriptor> bias_descriptor, dnn::FusedMHAKind kind,
     std::optional<double> dropout_rate, std::optional<int64_t> seed,
     CudnnHandle& cudnn, double scale, std::vector<int64_t>& intermediate_shape,
     bool use_dropout = false, bool use_mask = false, bool use_bias = false,
@@ -7138,9 +7155,16 @@ GetCudnnFlashAttentionBackwardOperationGraph(
 
   if (use_bias) {
     // bias -> p_after_bias
+    std::vector<int64_t> bias_dims = (*bias_descriptor).dimensions();
+    std::vector<int64_t> bias_strides = (*bias_descriptor).GetLogicalStrides();
+    if (bias_dims.size() == 3) {
+      bias_dims.insert(bias_dims.begin(), 1);
+      bias_strides.insert(bias_strides.begin(), bias_dims[1] * bias_strides[0]);
+    }
     TF_ASSIGN_OR_RETURN(auto tensor_p_after_bias,
                         CreateCudnnFlashAttentionBiasFwdTensor(
-                            intermediate_ops, p_dims, p_strides, dtype,
+                            intermediate_ops, bias_dims, bias_strides,
+                            p_dims, p_strides, dtype,
                             tensor_p_after_alpha_scale));
     tensor_p_after_alpha_scale = std::move(tensor_p_after_bias);
   }
@@ -9406,8 +9430,8 @@ CudnnSupport::FusedMHABackwardRunnerFromDesc(
                 bmm1_grad_gemm1_rhs_descriptor, bmm1_grad_gemm2_rhs_descriptor,
                 bmm2_grad_gemm1_lhs_descriptor, bmm2_grad_gemm2_rhs_descriptor,
                 d_output_descriptor, d_bmm1_lhs_descriptor,
-                d_bmm1_rhs_descriptor, d_bmm2_rhs_descriptor, kind,
-                dropout_rate, seed, cudnn, scale, intermediate_shape,
+                d_bmm1_rhs_descriptor, d_bmm2_rhs_descriptor, bias_descriptor,
+                kind, dropout_rate, seed, cudnn, scale, intermediate_shape,
                 use_dropout,
                 /*use_mask*/ mask_descriptor != std::nullopt,
                 /*use_bias*/ bias_descriptor != std::nullopt, is_causal_mask)
