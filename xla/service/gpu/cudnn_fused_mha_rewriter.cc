@@ -1691,13 +1691,10 @@ absl::StatusOr<bool> CudnnFusedMHARewriter::Run(
                               matched_result.need_canonicalization));
           continue;
         }
-        // check if dbias exist and the cudnn version is > 8.9.1. We
-        // won't lower bwd if this condition is not met as we won't deal with
-        // unswizzling now
-        if (matched_bwd_result.matched_dbias &&
-            !IsComputeCapabilityAndCudnnSupported(
-                compute_capability_, cudnn_version,
-                stream_executor::dnn::VersionInfo(8, 9, 1))) {
+        // (TODO) disable dbias lowering for now as fused attn is removed and
+        // flash attn does not support dbias yet. Enable this once dbias is
+        // implemented.
+        if (matched_bwd_result.matched_dbias) {
           // restore fwd graph if bwd pattern match failed
           TF_RETURN_IF_ERROR(
               RestoreFwdGraph(comp, fwd_fmha_call, original_bmm2, activation,
