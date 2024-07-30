@@ -143,15 +143,7 @@ class GpuPriorityFusionQueue {
         mlir_context_(mlir_context),
         fusion_analysis_cache_(fusion_analysis_cache),
         triton_softmax_priority_fusion_enabled_(
-            triton_softmax_priority_fusion_enabled),
-        can_fuse_cache_access(0),
-        can_fuse_cache_hit(0),
-        max_operands_update_priority_size(0),
-        max_fusions_update_priority_size(0),
-        total_operands_update_priority_size(0),
-        total_fusions_update_priority_size(0),
-        worst_operands_producer_instr(nullptr),
-        worst_fusions_producer_instr(nullptr) {
+            triton_softmax_priority_fusion_enabled) {
     VLOG(2) << "Running full HLO cost analysis for " << computation_->name();
     TF_CHECK_OK(computation_->Accept(&cost_analysis_));
 
@@ -258,16 +250,6 @@ class GpuPriorityFusionQueue {
 
   // Update priorities of all affected ops.
   void UpdatePriorities() {
-    total_operands_update_priority_size += operands_to_update_priority_.size();
-    total_fusions_update_priority_size += fusions_to_update_priority_.size();
-    if (operands_to_update_priority_.size() > max_operands_update_priority_size) {
-      max_operands_update_priority_size = operands_to_update_priority_.size();
-      worst_operands_producer_instr = this->current_producer();
-    }
-    if (fusions_to_update_priority_.size() > max_fusions_update_priority_size) {
-      max_fusions_update_priority_size = fusions_to_update_priority_.size();
-      worst_fusions_producer_instr = this->current_producer();
-    }
     // Revisit costs of all updated ops. It's important to update cost analysis
     // before recalculating priorities.
     for (auto instruction : operands_to_update_priority_) {
@@ -276,11 +258,7 @@ class GpuPriorityFusionQueue {
     for (auto instruction : fusions_to_update_priority_) {
       TF_CHECK_OK(cost_analysis_.RevisitInstruction(instruction));
     }
-    // std::vector<HloInstruction*> instrs {operands_to_update_priority_.begin(),
-    //                                  operands_to_update_priority_.end()};
-    // std::vector<HloInstruction*> instrs2 {fusions_to_update_priority_.begin(),
-    //                                  fusions_to_update_priority_.end()};
-    // to_update_priority_vec.insert(instrs.end(), instrs2.begin(), instrs2.end());
+
     for(auto& instruction : operands_to_update_priority_) {
       to_update_priority_vec.push_back(instruction);
     }
@@ -399,51 +377,6 @@ class GpuPriorityFusionQueue {
 
   const std::vector<HloInstruction*>& current_consumers() {
     return current_consumers_;
-  }
-
-  std::string get_cache_stats() {
-    std::ostringstream cache_stat;
-    cache_stat
-        << "fusion_analysis_cache_.analyses_cache_: "
-        << fusion_analysis_cache_.analyses_cache_hit << " "
-        << fusion_analysis_cache_.analyses_cache_access << " "
-        << (double)fusion_analysis_cache_.analyses_cache_hit /
-               fusion_analysis_cache_.analyses_cache_access
-        << "\n"
-        << "gpu_performance_model_cache_.instruction_runtime_data_: "
-        << gpu_performance_model_cache_.instruction_runtime_data_hit << " "
-        << gpu_performance_model_cache_.instruction_runtime_data_access << " "
-        << (double)gpu_performance_model_cache_.instruction_runtime_data_hit /
-               gpu_performance_model_cache_.instruction_runtime_data_access
-        << "\n"
-        << "gpu_performance_model_cache_.fusion_runtime_data_: "
-        << gpu_performance_model_cache_.fusion_runtime_data_hit << " "
-        << gpu_performance_model_cache_.fusion_runtime_data_access << " "
-        << (double)gpu_performance_model_cache_.fusion_runtime_data_hit /
-               gpu_performance_model_cache_.fusion_runtime_data_access
-        << "\n"
-        << "can_fuse_cache_: " << can_fuse_cache_hit << " "
-        << can_fuse_cache_access << " "
-        << (double)can_fuse_cache_hit / can_fuse_cache_access << "\n"
-        << "max_operands_update_priority_size: "
-        << max_operands_update_priority_size
-        << ", max_fusions_update_priority_size: "
-        << max_fusions_update_priority_size << "\n"
-        << "total_operands_update_priority_size: "
-        << total_operands_update_priority_size
-        << ", total_fusions_update_priority_size: "
-        << total_fusions_update_priority_size << "\n"
-        << "worst_operands_producer_instr: "
-        << (worst_operands_producer_instr == nullptr
-                ? ""
-                : worst_operands_producer_instr->ToString())
-        << "\n"
-        << "worst_fusions_producer_instr: "
-        << (worst_fusions_producer_instr == nullptr
-                ? ""
-                : worst_fusions_producer_instr->ToString())
-        << "\n";
-    return cache_stat.str();
   }
 
  private:
@@ -626,9 +559,7 @@ class GpuPriorityFusionQueue {
       auto& producer_cache = can_fuse_cache_[producer];
 
       auto it = producer_cache.find(consumer);
-      can_fuse_cache_access += 1;
       if (it != producer_cache.end()) {
-        can_fuse_cache_hit += 1;
         return it->second;
       }
     }
@@ -731,17 +662,6 @@ class GpuPriorityFusionQueue {
   bool triton_softmax_priority_fusion_enabled_;
 
   bool dump_fusion_visualization_;
-
-  int64_t can_fuse_cache_access;
-  int64_t can_fuse_cache_hit;
-  int64_t max_operands_update_priority_size;
-  int64_t max_fusions_update_priority_size;
-  int64_t total_operands_update_priority_size;;
-  int64_t total_fusions_update_priority_size;
-  HloInstruction* worst_operands_producer_instr;
-  HloInstruction* worst_fusions_producer_instr;
-  int64_t worst_operands_producer_size;
-  int64_t worst_fusions_producer_size;
 };
 
 }  // namespace
@@ -893,8 +813,7 @@ absl::StatusOr<bool> GpuPriorityFusion::Run(
         }
       }
     }
-    // print fusion cache stats
-    VLOG(5) << fusion_queue->get_cache_stats();
+
   }
 
   // FusionAnalysis cache uses unique_id as key. IDs are only unique inside one

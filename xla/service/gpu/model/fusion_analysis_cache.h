@@ -35,11 +35,7 @@ class HloFusionAnalysisCache {
  public:
   explicit HloFusionAnalysisCache(
       const stream_executor::DeviceDescription& device_info)
-      : device_info_(device_info),
-      analyses_cache_hit(0),
-      analyses_cache_access(0),
-      producer_consumer_analyses_cache_hit(0),
-      producer_consumer_analyses_cache_access(0) {}
+      : device_info_(device_info) {}
 
   // Returns the analysis for the given instruction, creating it if it doesn't
   // exist yet. Do not call concurrently with `Invalidate` for the same key.
@@ -55,10 +51,7 @@ class HloFusionAnalysisCache {
 
   // Delete all cache entries.
   void Clear();
-  int64_t analyses_cache_hit;
-  int64_t analyses_cache_access;
-  int64_t producer_consumer_analyses_cache_hit;
-  int64_t producer_consumer_analyses_cache_access;
+
  private:
   const stream_executor::DeviceDescription& device_info_;
 

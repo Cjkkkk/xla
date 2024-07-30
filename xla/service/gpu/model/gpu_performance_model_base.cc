@@ -91,9 +91,7 @@ std::optional<EstimateRunTimeData> GpuPerformanceModelCache::Get(
   absl::MutexLock lock(&mutex_);
 
   auto it = instruction_runtime_data_.find(&instruction);
-  instruction_runtime_data_access += 1;
   if (it != instruction_runtime_data_.end()) {
-    instruction_runtime_data_hit += 1;
     return it->second;
   }
   return std::nullopt;
@@ -104,11 +102,9 @@ std::optional<absl::Duration> GpuPerformanceModelCache::Get(
   absl::MutexLock lock(&mutex_);
 
   auto it = fusion_runtime_data_.find(&producer);
-  fusion_runtime_data_access += 1;
   if (it != fusion_runtime_data_.end()) {
     auto jt = it->second.find(&consumer);
     if (jt != it->second.end()) {
-      fusion_runtime_data_hit += 1;
       return jt->second;
     }
   }

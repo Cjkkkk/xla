@@ -62,11 +62,6 @@ struct EstimateRunTimeData {
 
 class GpuPerformanceModelCache {
  public:
-  GpuPerformanceModelCache()
-    :instruction_runtime_data_hit(0),
-     instruction_runtime_data_access(0),
-     fusion_runtime_data_hit(0),
-     fusion_runtime_data_access(0) {}
   // Returns cached runtime data for the instruction or producer-consumer pair.
   // Returns nullopt if there is no data in cache.
   std::optional<EstimateRunTimeData> Get(const HloInstruction& instruction);
