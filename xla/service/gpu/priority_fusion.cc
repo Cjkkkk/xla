@@ -164,12 +164,12 @@ class GpuPriorityFusionQueue {
       instructions.push_back(instruction);
     }
 
-    ComputeAndSetPriorities(instructions);
+    ComputeAndSetPriorities(instructions, 0);
   }
 
   void ComputeAndSetPriorities(
-      const std::vector<HloInstruction*>& instructions) {
-    std::vector<Priority> priorities = ComputePriorities(instructions);
+      const std::vector<HloInstruction*>& instructions, int64_t num_may_in_cache) {
+    std::vector<Priority> priorities = ComputePriorities(instructions, num_may_in_cache);
 
     for (auto [instruction, priority] : llvm::zip(instructions, priorities)) {
       auto key = std::make_pair(priority, instruction->unique_id());
@@ -198,7 +198,8 @@ class GpuPriorityFusionQueue {
   }
 
   std::vector<Priority> ComputePriorities(
-      const std::vector<HloInstruction*>& instructions) {
+      const std::vector<HloInstruction*>& instructions,
+      int64_t num_may_in_cache) {
     auto schedule_or_run = [this](std::function<void()> fn) {
       if (thread_pool_) {
         thread_pool_->Schedule(std::move(fn));
@@ -211,7 +212,7 @@ class GpuPriorityFusionQueue {
 
     for (size_t i = 0; i < instructions.size(); ++i) {
       schedule_or_run([&, i] {
-        priorities[i] = CalculateProducerPriority(instructions[i]);
+        priorities[i] = CalculateProducerPriority(instructions[i], i >= num_may_in_cache);
         counter.DecrementCount();
       });
     }
@@ -239,7 +240,7 @@ class GpuPriorityFusionQueue {
         // We don't check if bitcasts can be fused with all consumers, so we
         // have to do it here.
         llvm::erase_if(current_consumers_, [&](HloInstruction* consumer) {
-          return !CanFuseCached(current_producer_, consumer);
+          return !CanFuseCached(current_producer_, consumer, false);
         });
       }
     }
@@ -251,14 +252,24 @@ class GpuPriorityFusionQueue {
   void UpdatePriorities() {
     // Revisit costs of all updated ops. It's important to update cost analysis
     // before recalculating priorities.
-    for (auto instruction : to_update_priority_) {
+    for (auto instruction : operands_to_update_priority_) {
+      TF_CHECK_OK(cost_analysis_.RevisitInstruction(instruction));
+    }
+    for (auto instruction : fusions_to_update_priority_) {
       TF_CHECK_OK(cost_analysis_.RevisitInstruction(instruction));
     }
 
-    ComputeAndSetPriorities(std::vector<HloInstruction*>{
-        to_update_priority_.begin(), to_update_priority_.end()});
+    for(auto& instruction : operands_to_update_priority_) {
+      to_update_priority_vec.push_back(instruction);
+    }
+    for(auto& instruction : fusions_to_update_priority_) {
+      to_update_priority_vec.push_back(instruction);
+    }
+    ComputeAndSetPriorities(to_update_priority_vec, operands_to_update_priority_.size());
 
-    to_update_priority_.clear();
+    operands_to_update_priority_.clear();
+    fusions_to_update_priority_.clear();
+    to_update_priority_vec.clear();
   }
 
   // Prepares producer and consumer instruction to be fused. Invalidates caches
@@ -343,14 +354,15 @@ class GpuPriorityFusionQueue {
         continue;
       }
 
-      to_update_priority_.insert(operand);
+      operands_to_update_priority_.insert(operand);
     }
-    to_update_priority_.insert(fusion);
+    fusions_to_update_priority_.insert(fusion);
   }
 
   // Removes data for the instruction.
   void RemoveInstruction(HloInstruction* instruction) {
-    to_update_priority_.erase(instruction);
+    operands_to_update_priority_.erase(instruction);
+    fusions_to_update_priority_.erase(instruction);
     fusion_analysis_cache_.Invalidate(*instruction);
 
     auto reverse_it = reverse_map_.find(instruction);
@@ -370,7 +382,7 @@ class GpuPriorityFusionQueue {
  private:
   // Returns the priority of the producer based on its current operands and
   // users.
-  Priority CalculateProducerPriority(HloInstruction* producer) {
+  Priority CalculateProducerPriority(HloInstruction* producer, bool skip_cache) {
     // Bitcasts should always be fused first, since they are no-ops.
     if (producer->opcode() == HloOpcode::kBitcast) {
       return std::numeric_limits<Priority>::max();
@@ -383,7 +395,7 @@ class GpuPriorityFusionQueue {
     }
 
     // Don't fuse if we can't fuse in all users.
-    if (auto fusion_decision = CanFuseWithAllNonBitcastUsers(producer);
+    if (auto fusion_decision = CanFuseWithAllNonBitcastUsers(producer, skip_cache);
         !fusion_decision) {
       if (fusion_process_dump_) {
         absl::MutexLock lock(&fusion_process_dump_mutex_);
@@ -399,7 +411,7 @@ class GpuPriorityFusionQueue {
         GpuPerformanceModel::EstimateRunTimesForPriorityFusion(
             producer, *device_info_, &cost_analysis_,
             GpuPerformanceModelOptions::PriorityFusion(
-                &fusion_analysis_cache_, &gpu_performance_model_cache_),
+                &fusion_analysis_cache_, &gpu_performance_model_cache_, skip_cache),
             producer->users());
 
     if (fusion_process_dump_) {
@@ -503,7 +515,7 @@ class GpuPriorityFusionQueue {
     if (analysis.GetEmitterFusionKind() ==
         HloFusionAnalysis::EmitterFusionKind::kReduction) {
       const auto& analysis_fused =
-          fusion_analysis_cache_.Get(*producer, *consumer);
+          AnalyzeProducerConsumerFusion(*producer, *consumer, *device_info_);
       if (analysis_fused.GetEmitterFusionKind() ==
           HloFusionAnalysis::EmitterFusionKind::kLoop) {
         return "fusion into output of a reduce fusion would create a loop "
@@ -540,8 +552,9 @@ class GpuPriorityFusionQueue {
   }
 
   FusionDecision CanFuseCached(HloInstruction* producer,
-                               HloInstruction* consumer) {
-    {
+                               HloInstruction* consumer, bool skip_cache) {
+    // skip cache if you know for sure it is not going to be in the cache
+    if (!skip_cache) {
       absl::MutexLock lock(&can_fuse_cache_mutex_);
       auto& producer_cache = can_fuse_cache_[producer];
 
@@ -565,7 +578,7 @@ class GpuPriorityFusionQueue {
     return fusion_decision;
   }
 
-  FusionDecision CanFuseWithAllNonBitcastUsers(HloInstruction* producer) {
+  FusionDecision CanFuseWithAllNonBitcastUsers(HloInstruction* producer, bool skip_cache) {
     if (producer->users().empty()) {
       return "No users to fuse";
     }
@@ -577,7 +590,7 @@ class GpuPriorityFusionQueue {
         continue;
       }
       has_non_bitcast_user = true;
-      if (auto fusion_decision = CanFuseCached(producer, user);
+      if (auto fusion_decision = CanFuseCached(producer, user, skip_cache);
           !fusion_decision) {
         VLOG(10) << "Cannot fuse " << producer->name() << " with "
                  << user->name() << ", because: " << fusion_decision.Explain();
@@ -618,8 +631,9 @@ class GpuPriorityFusionQueue {
   // the priority updates until current_consumers_ becomes empty. This is to
   // avoid recomputing priorities multiple times before we dequeue a new
   // producer.
-  absl::flat_hash_set<HloInstruction*> to_update_priority_;
-
+  absl::flat_hash_set<HloInstruction*> operands_to_update_priority_;
+  absl::flat_hash_set<HloInstruction*> fusions_to_update_priority_;
+  std::vector<HloInstruction*> to_update_priority_vec;
   // Proto with structured logs of fusion decisions. Used only for debugging. If
   // null, logging is disabled.
   FusionProcessDumpProto* fusion_process_dump_;
@@ -811,7 +825,6 @@ absl::StatusOr<bool> GpuPriorityFusion::Run(
                                 module->config().debug_options(),
                                 "priority_fusion_dump");
   }
-
   return changed;
 }
 
@@ -829,7 +842,8 @@ HloInstruction::FusionKind GpuPriorityFusion::ChooseKind(
   // Derive kInput/kLoop fusion kinds from fusion analysis. This shouldn't
   // matter but some passes downstream still query these instead of fusion
   // analysis.
-  const auto& analysis = fusion_analysis_cache_.Get(*producer, *consumer);
+  const auto& analysis =
+      AnalyzeProducerConsumerFusion(*producer, *consumer, device_info_);
   switch (analysis.GetEmitterFusionKind()) {
     case HloFusionAnalysis::EmitterFusionKind::kLoop:
       return HloInstruction::FusionKind::kLoop;
