@@ -143,7 +143,15 @@ class GpuPriorityFusionQueue {
         mlir_context_(mlir_context),
         fusion_analysis_cache_(fusion_analysis_cache),
         triton_softmax_priority_fusion_enabled_(
-            triton_softmax_priority_fusion_enabled) {
+            triton_softmax_priority_fusion_enabled),
+        can_fuse_cache_access(0),
+        can_fuse_cache_hit(0),
+        max_operands_update_priority_size(0),
+        max_fusions_update_priority_size(0),
+        total_operands_update_priority_size(0),
+        total_fusions_update_priority_size(0),
+        worst_operands_producer_instr(nullptr),
+        worst_fusions_producer_instr(nullptr) {
     VLOG(2) << "Running full HLO cost analysis for " << computation_->name();
     TF_CHECK_OK(computation_->Accept(&cost_analysis_));
 
@@ -164,12 +172,12 @@ class GpuPriorityFusionQueue {
       instructions.push_back(instruction);
     }
 
-    ComputeAndSetPriorities(instructions);
+    ComputeAndSetPriorities(instructions, 0);
   }
 
   void ComputeAndSetPriorities(
-      const std::vector<HloInstruction*>& instructions) {
-    std::vector<Priority> priorities = ComputePriorities(instructions);
+      const std::vector<HloInstruction*>& instructions, int64_t num_may_in_cache) {
+    std::vector<Priority> priorities = ComputePriorities(instructions, num_may_in_cache);
 
     for (auto [instruction, priority] : llvm::zip(instructions, priorities)) {
       auto key = std::make_pair(priority, instruction->unique_id());
@@ -198,7 +206,8 @@ class GpuPriorityFusionQueue {
   }
 
   std::vector<Priority> ComputePriorities(
-      const std::vector<HloInstruction*>& instructions) {
+      const std::vector<HloInstruction*>& instructions,
+      int64_t num_may_in_cache) {
     auto schedule_or_run = [this](std::function<void()> fn) {
       if (thread_pool_) {
         thread_pool_->Schedule(std::move(fn));
@@ -211,7 +220,7 @@ class GpuPriorityFusionQueue {
 
     for (size_t i = 0; i < instructions.size(); ++i) {
       schedule_or_run([&, i] {
-        priorities[i] = CalculateProducerPriority(instructions[i]);
+        priorities[i] = CalculateProducerPriority(instructions[i], i >= num_may_in_cache);
         counter.DecrementCount();
       });
     }
@@ -239,7 +248,7 @@ class GpuPriorityFusionQueue {
         // We don't check if bitcasts can be fused with all consumers, so we
         // have to do it here.
         llvm::erase_if(current_consumers_, [&](HloInstruction* consumer) {
-          return !CanFuseCached(current_producer_, consumer);
+          return !CanFuseCached(current_producer_, consumer, false);
         });
       }
     }
@@ -249,16 +258,40 @@ class GpuPriorityFusionQueue {
 
   // Update priorities of all affected ops.
   void UpdatePriorities() {
+    total_operands_update_priority_size += operands_to_update_priority_.size();
+    total_fusions_update_priority_size += fusions_to_update_priority_.size();
+    if (operands_to_update_priority_.size() > max_operands_update_priority_size) {
+      max_operands_update_priority_size = operands_to_update_priority_.size();
+      worst_operands_producer_instr = this->current_producer();
+    }
+    if (fusions_to_update_priority_.size() > max_fusions_update_priority_size) {
+      max_fusions_update_priority_size = fusions_to_update_priority_.size();
+      worst_fusions_producer_instr = this->current_producer();
+    }
     // Revisit costs of all updated ops. It's important to update cost analysis
     // before recalculating priorities.
-    for (auto instruction : to_update_priority_) {
+    for (auto instruction : operands_to_update_priority_) {
       TF_CHECK_OK(cost_analysis_.RevisitInstruction(instruction));
     }
+    for (auto instruction : fusions_to_update_priority_) {
+      TF_CHECK_OK(cost_analysis_.RevisitInstruction(instruction));
+    }
+    // std::vector<HloInstruction*> instrs {operands_to_update_priority_.begin(),
+    //                                  operands_to_update_priority_.end()};
+    // std::vector<HloInstruction*> instrs2 {fusions_to_update_priority_.begin(),
+    //                                  fusions_to_update_priority_.end()};
+    // to_update_priority_vec.insert(instrs.end(), instrs2.begin(), instrs2.end());
+    for(auto& instruction : operands_to_update_priority_) {
+      to_update_priority_vec.push_back(instruction);
+    }
+    for(auto& instruction : fusions_to_update_priority_) {
+      to_update_priority_vec.push_back(instruction);
+    }
+    ComputeAndSetPriorities(to_update_priority_vec, operands_to_update_priority_.size());
 
-    ComputeAndSetPriorities(std::vector<HloInstruction*>{
-        to_update_priority_.begin(), to_update_priority_.end()});
-
-    to_update_priority_.clear();
+    operands_to_update_priority_.clear();
+    fusions_to_update_priority_.clear();
+    to_update_priority_vec.clear();
   }
 
   // Prepares producer and consumer instruction to be fused. Invalidates caches
@@ -343,14 +376,15 @@ class GpuPriorityFusionQueue {
         continue;
       }
 
-      to_update_priority_.insert(operand);
+      operands_to_update_priority_.insert(operand);
     }
-    to_update_priority_.insert(fusion);
+    fusions_to_update_priority_.insert(fusion);
   }
 
   // Removes data for the instruction.
   void RemoveInstruction(HloInstruction* instruction) {
-    to_update_priority_.erase(instruction);
+    operands_to_update_priority_.erase(instruction);
+    fusions_to_update_priority_.erase(instruction);
     fusion_analysis_cache_.Invalidate(*instruction);
 
     auto reverse_it = reverse_map_.find(instruction);
@@ -367,10 +401,55 @@ class GpuPriorityFusionQueue {
     return current_consumers_;
   }
 
+  std::string get_cache_stats() {
+    std::ostringstream cache_stat;
+    cache_stat
+        << "fusion_analysis_cache_.analyses_cache_: "
+        << fusion_analysis_cache_.analyses_cache_hit << " "
+        << fusion_analysis_cache_.analyses_cache_access << " "
+        << (double)fusion_analysis_cache_.analyses_cache_hit /
+               fusion_analysis_cache_.analyses_cache_access
+        << "\n"
+        << "gpu_performance_model_cache_.instruction_runtime_data_: "
+        << gpu_performance_model_cache_.instruction_runtime_data_hit << " "
+        << gpu_performance_model_cache_.instruction_runtime_data_access << " "
+        << (double)gpu_performance_model_cache_.instruction_runtime_data_hit /
+               gpu_performance_model_cache_.instruction_runtime_data_access
+        << "\n"
+        << "gpu_performance_model_cache_.fusion_runtime_data_: "
+        << gpu_performance_model_cache_.fusion_runtime_data_hit << " "
+        << gpu_performance_model_cache_.fusion_runtime_data_access << " "
+        << (double)gpu_performance_model_cache_.fusion_runtime_data_hit /
+               gpu_performance_model_cache_.fusion_runtime_data_access
+        << "\n"
+        << "can_fuse_cache_: " << can_fuse_cache_hit << " "
+        << can_fuse_cache_access << " "
+        << (double)can_fuse_cache_hit / can_fuse_cache_access << "\n"
+        << "max_operands_update_priority_size: "
+        << max_operands_update_priority_size
+        << ", max_fusions_update_priority_size: "
+        << max_fusions_update_priority_size << "\n"
+        << "total_operands_update_priority_size: "
+        << total_operands_update_priority_size
+        << ", total_fusions_update_priority_size: "
+        << total_fusions_update_priority_size << "\n"
+        << "worst_operands_producer_instr: "
+        << (worst_operands_producer_instr == nullptr
+                ? ""
+                : worst_operands_producer_instr->ToString())
+        << "\n"
+        << "worst_fusions_producer_instr: "
+        << (worst_fusions_producer_instr == nullptr
+                ? ""
+                : worst_fusions_producer_instr->ToString())
+        << "\n";
+    return cache_stat.str();
+  }
+
  private:
   // Returns the priority of the producer based on its current operands and
   // users.
-  Priority CalculateProducerPriority(HloInstruction* producer) {
+  Priority CalculateProducerPriority(HloInstruction* producer, bool skip_cache) {
     // Bitcasts should always be fused first, since they are no-ops.
     if (producer->opcode() == HloOpcode::kBitcast) {
       return std::numeric_limits<Priority>::max();
@@ -383,7 +462,7 @@ class GpuPriorityFusionQueue {
     }
 
     // Don't fuse if we can't fuse in all users.
-    if (auto fusion_decision = CanFuseWithAllNonBitcastUsers(producer);
+    if (auto fusion_decision = CanFuseWithAllNonBitcastUsers(producer, skip_cache);
         !fusion_decision) {
       if (fusion_process_dump_) {
         absl::MutexLock lock(&fusion_process_dump_mutex_);
@@ -399,7 +478,7 @@ class GpuPriorityFusionQueue {
         GpuPerformanceModel::EstimateRunTimesForPriorityFusion(
             producer, *device_info_, &cost_analysis_,
             GpuPerformanceModelOptions::PriorityFusion(
-                &fusion_analysis_cache_, &gpu_performance_model_cache_),
+                &fusion_analysis_cache_, &gpu_performance_model_cache_, skip_cache),
             producer->users());
 
     if (fusion_process_dump_) {
@@ -503,7 +582,7 @@ class GpuPriorityFusionQueue {
     if (analysis.GetEmitterFusionKind() ==
         HloFusionAnalysis::EmitterFusionKind::kReduction) {
       const auto& analysis_fused =
-          fusion_analysis_cache_.Get(*producer, *consumer);
+          AnalyzeProducerConsumerFusion(*producer, *consumer, *device_info_);
       if (analysis_fused.GetEmitterFusionKind() ==
           HloFusionAnalysis::EmitterFusionKind::kLoop) {
         return "fusion into output of a reduce fusion would create a loop "
@@ -540,13 +619,16 @@ class GpuPriorityFusionQueue {
   }
 
   FusionDecision CanFuseCached(HloInstruction* producer,
-                               HloInstruction* consumer) {
-    {
+                               HloInstruction* consumer, bool skip_cache) {
+    // skip cache if you know for sure it is not going to be in the cache
+    if (!skip_cache) {
       absl::MutexLock lock(&can_fuse_cache_mutex_);
       auto& producer_cache = can_fuse_cache_[producer];
 
       auto it = producer_cache.find(consumer);
+      can_fuse_cache_access += 1;
       if (it != producer_cache.end()) {
+        can_fuse_cache_hit += 1;
         return it->second;
       }
     }
@@ -565,7 +647,7 @@ class GpuPriorityFusionQueue {
     return fusion_decision;
   }
 
-  FusionDecision CanFuseWithAllNonBitcastUsers(HloInstruction* producer) {
+  FusionDecision CanFuseWithAllNonBitcastUsers(HloInstruction* producer, bool skip_cache) {
     if (producer->users().empty()) {
       return "No users to fuse";
     }
@@ -577,7 +659,7 @@ class GpuPriorityFusionQueue {
         continue;
       }
       has_non_bitcast_user = true;
-      if (auto fusion_decision = CanFuseCached(producer, user);
+      if (auto fusion_decision = CanFuseCached(producer, user, skip_cache);
           !fusion_decision) {
         VLOG(10) << "Cannot fuse " << producer->name() << " with "
                  << user->name() << ", because: " << fusion_decision.Explain();
@@ -618,8 +700,9 @@ class GpuPriorityFusionQueue {
   // the priority updates until current_consumers_ becomes empty. This is to
   // avoid recomputing priorities multiple times before we dequeue a new
   // producer.
-  absl::flat_hash_set<HloInstruction*> to_update_priority_;
-
+  absl::flat_hash_set<HloInstruction*> operands_to_update_priority_;
+  absl::flat_hash_set<HloInstruction*> fusions_to_update_priority_;
+  std::vector<HloInstruction*> to_update_priority_vec;
   // Proto with structured logs of fusion decisions. Used only for debugging. If
   // null, logging is disabled.
   FusionProcessDumpProto* fusion_process_dump_;
@@ -648,6 +731,17 @@ class GpuPriorityFusionQueue {
   bool triton_softmax_priority_fusion_enabled_;
 
   bool dump_fusion_visualization_;
+
+  int64_t can_fuse_cache_access;
+  int64_t can_fuse_cache_hit;
+  int64_t max_operands_update_priority_size;
+  int64_t max_fusions_update_priority_size;
+  int64_t total_operands_update_priority_size;;
+  int64_t total_fusions_update_priority_size;
+  HloInstruction* worst_operands_producer_instr;
+  HloInstruction* worst_fusions_producer_instr;
+  int64_t worst_operands_producer_size;
+  int64_t worst_fusions_producer_size;
 };
 
 }  // namespace
@@ -799,6 +893,8 @@ absl::StatusOr<bool> GpuPriorityFusion::Run(
         }
       }
     }
+    // print fusion cache stats
+    VLOG(5) << fusion_queue->get_cache_stats();
   }
 
   // FusionAnalysis cache uses unique_id as key. IDs are only unique inside one
@@ -811,7 +907,6 @@ absl::StatusOr<bool> GpuPriorityFusion::Run(
                                 module->config().debug_options(),
                                 "priority_fusion_dump");
   }
-
   return changed;
 }
 
@@ -829,7 +924,8 @@ HloInstruction::FusionKind GpuPriorityFusion::ChooseKind(
   // Derive kInput/kLoop fusion kinds from fusion analysis. This shouldn't
   // matter but some passes downstream still query these instead of fusion
   // analysis.
-  const auto& analysis = fusion_analysis_cache_.Get(*producer, *consumer);
+  const auto& analysis =
+      AnalyzeProducerConsumerFusion(*producer, *consumer, device_info_);
   switch (analysis.GetEmitterFusionKind()) {
     case HloFusionAnalysis::EmitterFusionKind::kLoop:
       return HloInstruction::FusionKind::kLoop;

@@ -55,10 +55,10 @@ GpuPerformanceModel::EstimateRunTimeForInstruction(
   // Use the analysis cache if present.
   // TODO(jreiffers): Remove this once all callers use a cache.
   std::optional<HloFusionAnalysis> local_analysis;
-  if (!config.fusion_analysis_cache) {
+  if (!config.fusion_analysis_cache || config.skip_cache) {
     local_analysis = AnalyzeFusion(*instr, device_info);
   }
-  const auto& fusion_analysis = config.fusion_analysis_cache
+  const auto& fusion_analysis = config.fusion_analysis_cache && !config.skip_cache
                                     ? config.fusion_analysis_cache->Get(*instr)
                                     : local_analysis.value();
   LaunchDimensions launch_dimensions =
@@ -108,7 +108,7 @@ GpuPerformanceModel::EstimateRunTimeForInstructionCached(
     const HloInstruction* instr, const se::DeviceDescription& device_info,
     const GpuHloCostAnalysis* cost_analysis,
     const GpuPerformanceModelOptions& config) {
-  if (config.gpu_performance_model_cache) {
+  if (config.gpu_performance_model_cache && !config.skip_cache) {
     if (auto cached_result = config.gpu_performance_model_cache->Get(*instr)) {
       return *cached_result;
     }
@@ -190,15 +190,8 @@ absl::Duration GpuPerformanceModel::EstimateUnfusedExecTime(
     }
   }
 
-  std::optional<HloFusionAnalysis> local_analysis_fused;
-  if (!config.fusion_analysis_cache) {
-    local_analysis_fused =
-        AnalyzeProducerConsumerFusion(*producer, *consumer, device_info);
-  }
   const auto& fusion_analysis =
-      config.fusion_analysis_cache
-          ? config.fusion_analysis_cache->Get(*producer, *consumer)
-          : local_analysis_fused.value();
+      AnalyzeProducerConsumerFusion(*producer, *consumer, device_info);
 
   LaunchDimensions launch_dimensions =
       EstimateFusionLaunchDimensions(fusion_analysis);
@@ -260,7 +253,7 @@ absl::Duration GpuPerformanceModel::EstimateRunTimeForFusionCached(
     const se::DeviceDescription& device_info,
     const GpuHloCostAnalysis* cost_analysis,
     const GpuPerformanceModelOptions& config) {
-  if (config.gpu_performance_model_cache) {
+  if (config.gpu_performance_model_cache && !config.skip_cache) {
     if (auto fusion_runtime =
             config.gpu_performance_model_cache->Get(*producer, *consumer)) {
       return *fusion_runtime;

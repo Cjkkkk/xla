@@ -27,8 +27,10 @@ const HloFusionAnalysis& HloFusionAnalysisCache::Get(
     const HloInstruction& instruction) {
   {
     absl::MutexLock lock(&mutex_);
+    analyses_cache_access += 1;
     auto it = analyses_.find(instruction.unique_id());
     if (it != analyses_.end()) {
+      analyses_cache_hit += 1;
       return it->second;
     }
   }
@@ -52,8 +54,10 @@ const HloFusionAnalysis& HloFusionAnalysisCache::Get(
   std::pair<int, int> key{producer.unique_id(), consumer.unique_id()};
   {
     absl::MutexLock lock(&mutex_);
+    producer_consumer_analyses_cache_access += 1;
     auto it = producer_consumer_analyses_.find(key);
     if (it != producer_consumer_analyses_.end()) {
+      producer_consumer_analyses_cache_hit += 1;
       return it->second;
     }
   }

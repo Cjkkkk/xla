@@ -62,6 +62,11 @@ struct EstimateRunTimeData {
 
 class GpuPerformanceModelCache {
  public:
+  GpuPerformanceModelCache()
+    :instruction_runtime_data_hit(0),
+     instruction_runtime_data_access(0),
+     fusion_runtime_data_hit(0),
+     fusion_runtime_data_access(0) {}
   // Returns cached runtime data for the instruction or producer-consumer pair.
   // Returns nullopt if there is no data in cache.
   std::optional<EstimateRunTimeData> Get(const HloInstruction& instruction);
@@ -78,7 +83,10 @@ class GpuPerformanceModelCache {
   // for individual instructions in instruction_runtime_data_ and for
   // producer-consumer pairs in fusion_runtime_data_.
   void Invalidate(const HloInstruction& instruction);
-
+  int64_t instruction_runtime_data_hit;
+  int64_t instruction_runtime_data_access;
+  int64_t fusion_runtime_data_hit;
+  int64_t fusion_runtime_data_access;
  private:
   absl::Mutex mutex_;
 
@@ -105,16 +113,21 @@ struct GpuPerformanceModelOptions {
 
   GpuPerformanceModelCache* gpu_performance_model_cache = nullptr;
 
+  // skip checking cache if known for sure it is not in cache
+  bool skip_cache = false;
+
   static GpuPerformanceModelOptions Default() {
     return GpuPerformanceModelOptions();
   }
 
   static GpuPerformanceModelOptions PriorityFusion(
       HloFusionAnalysisCache* fusion_analysis_cache = nullptr,
-      GpuPerformanceModelCache* gpu_performance_model_cache = nullptr) {
+      GpuPerformanceModelCache* gpu_performance_model_cache = nullptr,
+      bool skip_cache = false) {
     GpuPerformanceModelOptions config;
     config.fusion_analysis_cache = fusion_analysis_cache;
     config.gpu_performance_model_cache = gpu_performance_model_cache;
+    config.skip_cache = skip_cache;
     // This constant was chosen empirically in early 2024, based on runtime
     // performance on a set of benchmarks internal to Google. Intuitively, we
     // expect it to be close to 1, but not quite 1 (i.e., sometimes, compute
