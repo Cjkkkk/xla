@@ -38,6 +38,7 @@ struct EstimateRunTimeData {
   int64_t flops;
   int64_t bytes_read;
   int64_t bytes_written;
+  std::vector<int64_t> operands_bytes_accessed;
   absl::Duration read_time;
   absl::Duration write_time;
   absl::Duration compute_time;
@@ -181,7 +182,9 @@ class GpuPerformanceModelBase {
   // elementwise cases.
   static int64_t GetSharedOperandBytesAccessed(
       const GpuHloCostAnalysis* cost_analysis, const HloInstruction* producer,
-      const HloInstruction* consumer, const HloInstruction* operand);
+      const HloInstruction* consumer, const HloInstruction* operand,
+      const EstimateRunTimeData* producer_runtime = nullptr,
+      const EstimateRunTimeData* consumer_runtime = nullptr);
 
   // Estimate read time of n_bytes_total bytes from global memory on a
   // given GPU. Account for L1 / L2 cache speedup if the input's nominal size

@@ -74,10 +74,12 @@ GpuPerformanceModel::EstimateRunTimeForInstruction(
 
   absl::Duration read_time;
   int64_t bytes_read = 0;
+  std::vector<int64_t> operands_bytes_accessed;
   for (const auto [operand_id, operand] : llvm::enumerate(instr->operands())) {
     int64_t operand_size = cost_analysis->GetShapeSize(operand->shape());
     int64_t n_bytes_total =
         GetOperandBytesAccessed(cost_analysis, instr, operand);
+    operands_bytes_accessed.push_back(n_bytes_total);
     int64_t n_bytes_net = std::min(operand_size, n_bytes_total);
     bytes_read += n_bytes_total;
 
@@ -94,9 +96,9 @@ GpuPerformanceModel::EstimateRunTimeForInstruction(
   absl::Duration exec_time = CombineComputeAndMemoryAccessTime(
       compute_time, read_time + write_time, config);
 
-  EstimateRunTimeData runtime_data = {flops,     bytes_read, bytes_written,
-                                      read_time, write_time, compute_time,
-                                      exec_time};
+  EstimateRunTimeData runtime_data = {
+      flops,     bytes_read, bytes_written, operands_bytes_accessed,
+      read_time, write_time, compute_time,  exec_time};
   VLOG(3) << "Runtime data for HLO: " << instr->name() << "\n"
           << launch_dimensions.ToString() << "\n"
           << runtime_data.ToString();
@@ -216,11 +218,13 @@ absl::Duration GpuPerformanceModel::EstimateUnfusedExecTime(
 
   absl::Duration read_time;
   int64_t bytes_read = 0;
+
   for (const auto* operand : fusion_operands) {
     int64_t operand_size = cost_analysis->GetShapeSize(operand->shape());
 
     int64_t n_bytes_total = GetSharedOperandBytesAccessed(
-        cost_analysis, producer, consumer, operand);
+        cost_analysis, producer, consumer, operand, &producer_runtime,
+        &consumer_runtime);
     int64_t n_bytes_net = std::min(operand_size, n_bytes_total);
     bytes_read += n_bytes_total;
 
@@ -243,6 +247,7 @@ absl::Duration GpuPerformanceModel::EstimateUnfusedExecTime(
           << EstimateRunTimeData{flops,
                                  bytes_read,
                                  consumer_runtime.bytes_written,
+                                 {},
                                  read_time,
                                  consumer_runtime.write_time,
                                  compute_time,

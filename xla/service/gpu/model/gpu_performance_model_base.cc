@@ -270,15 +270,23 @@ float GpuPerformanceModelBase::GetCommonUtilization(
 /*static*/
 int64_t GpuPerformanceModelBase::GetSharedOperandBytesAccessed(
     const GpuHloCostAnalysis* cost_analysis, const HloInstruction* producer,
-    const HloInstruction* consumer, const HloInstruction* operand) {
+    const HloInstruction* consumer, const HloInstruction* operand,
+    const EstimateRunTimeData* producer_runtime,
+    const EstimateRunTimeData* consumer_runtime) {
   float producer_utilization_by_consumer =
       GetOperandUtilization(cost_analysis, consumer, producer);
 
   int64_t bytes_accessed_by_producer =
-      GetOperandBytesAccessed(cost_analysis, producer, operand);
+      producer_runtime && producer->IsUserOf(operand)
+          ? producer_runtime
+                ->operands_bytes_accessed[producer->operand_index(operand)]
+          : GetOperandBytesAccessed(cost_analysis, producer, operand);
 
   int64_t bytes_accessed_by_consumer =
-      GetOperandBytesAccessed(cost_analysis, consumer, operand);
+      consumer_runtime && consumer->IsUserOf(operand)
+          ? consumer_runtime
+                ->operands_bytes_accessed[consumer->operand_index(operand)]
+          : GetOperandBytesAccessed(cost_analysis, consumer, operand);
 
   float common_utilization =
       producer->IsUserOf(operand)
