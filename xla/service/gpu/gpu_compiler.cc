@@ -180,6 +180,7 @@ limitations under the License.
 #include "xla/service/gpu/transforms/tree_reduction_rewriter.h"
 #include "xla/service/gpu/transforms/triton_fusion_numerics_verifier.h"
 #include "xla/service/gpu/transforms/windowed_einsum_handler.h"
+#include "xla/service/gpu/transforms/grouped_gemm_handler.h"
 #include "xla/service/hlo.pb.h"
 #include "xla/service/hlo_computation_deduplicator.h"
 #include "xla/service/hlo_constant_folding.h"
@@ -644,6 +645,7 @@ absl::Status RunOptimizationPasses(
   if (debug_options.xla_gpu_multi_streamed_windowed_einsum()) {
     pipeline.AddPass<WindowedEinsumHandler>();
   }
+  pipeline.AddPass<GroupedGemmHandler>();
   pipeline.AddPass<TopKSplitter>();
   pipeline.AddPass<TopkSpecializer>();
   pipeline.AddPass<TopkDecomposer>();

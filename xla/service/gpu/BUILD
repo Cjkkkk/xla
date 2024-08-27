@@ -1455,6 +1455,7 @@ cc_library(
         "//xla/service/gpu/transforms:tree_reduction_rewriter",
         "//xla/service/gpu/transforms:triton_fusion_numerics_verifier",
         "//xla/service/gpu/transforms:windowed_einsum_handler",
+        "//xla/service/gpu/transforms:grouped_gemm_handler",
         "//xla/service/llvm_ir:llvm_util",
         "//xla/service/spmd:collective_permute_motion",
         "//xla/service:algebraic_simplifier",

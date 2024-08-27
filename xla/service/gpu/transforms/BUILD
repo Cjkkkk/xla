@@ -2994,6 +2994,32 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "grouped_gemm_handler",
+    srcs = ["grouped_gemm_handler.cc"],
+    hdrs = ["grouped_gemm_handler.h"],
+    deps = [
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/utils:hlo_query",
+        "//xla/service:hlo_creation_utils",
+        "//xla/service:hlo_pass",
+        "//xla/service:pattern_matcher",
+        "//xla/service:shape_inference",
+        "//xla/service/gpu:backend_configs_cc",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@tsl//tsl/platform:errors",
+        "@tsl//tsl/platform:logging",
+        "@tsl//tsl/platform:statusor",
+    ],
+)
+
 xla_cc_test(
     name = "windowed_einsum_handler_test",
     srcs = ["windowed_einsum_handler_test.cc"],
