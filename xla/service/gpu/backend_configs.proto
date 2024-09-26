@@ -265,6 +265,9 @@ message CudnnfMHABackendConfig {
   // Sliding window length
   // ignored if the value <= 0
   int32 sliding_window_length = 24;
+
+  // Whether QKV has packed layout
+  bool is_packed = 25
 }
 
 // Generic backend config for XLA:GPU

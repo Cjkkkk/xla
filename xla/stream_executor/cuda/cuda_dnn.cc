@@ -4973,7 +4973,8 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     const std::optional<dnn::TensorDescriptor> bias_descriptor,
     const std::optional<dnn::TensorDescriptor> stats_descriptor, double scale,
     const bool use_dropout, const std::optional<double> dropout_rate,
-    const dnn::FMHAMaskKind mask_type, const int sliding_window_length) {
+    const dnn::FMHAMaskKind mask_type, const int sliding_window_length,
+    const bool is_packed) {
   using cudnn_frontend::graph::Tensor_attributes;
 
 #if CUDNN_VERSION >= 90000
@@ -5048,9 +5049,12 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
   // Setting actual seqlen
   bool is_padding = mask_type == dnn::FMHAMaskKind::PADDING ||
                     mask_type == dnn::FMHAMaskKind::PADDING_CAUSAL;
+
+  // Get batch size
+  auto q_dim = q_descriptor.GetCudnnCompatibleDimensions(true);
+  auto b = q_dim[0];
+
   if (is_padding) {
-    auto q_dim = q_descriptor.GetCudnnCompatibleDimensions(true);
-    auto b = q_dim[0];
     auto seq_q_tensor =
         graph.tensor(Tensor_attributes()
                          .set_name("seq_q")
@@ -5069,6 +5073,38 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     sdpa_options.set_seq_len_q(seq_q_tensor);
     sdpa_options.set_seq_len_kv(seq_kv_tensor);
   }
+
+  std::shared_ptr<Tensor_attributes> offset_o;
+  if (is_packed && is_padding) {
+    auto offset_q = graph.tensor(Tensor_attributes()
+                                     .set_name("offset_q")
+                                     .set_dim({b + 1, 1, 1, 1})
+                                     .set_stride({1, 1, 1, 1})
+                                     .set_uid(next_uid())
+                                     .set_data_type(fe::DataType_t::INT32));
+    auto offset_k = graph.tensor(Tensor_attributes()
+                                     .set_name("offset_k")
+                                     .set_dim({b + 1, 1, 1, 1})
+                                     .set_stride({1, 1, 1, 1})
+                                     .set_uid(next_uid())
+                                     .set_data_type(fe::DataType_t::INT32));
+    auto offset_v = graph.tensor(Tensor_attributes()
+                                     .set_name("offset_v")
+                                     .set_dim({b + 1, 1, 1, 1})
+                                     .set_stride({1, 1, 1, 1})
+                                     .set_uid(next_uid())
+                                     .set_data_type(fe::DataType_t::INT32));
+    offset_o = graph.tensor(Tensor_attributes()
+                                .set_name("offset_o")
+                                .set_dim({b + 1, 1, 1, 1})
+                                .set_stride({1, 1, 1, 1})
+                                .set_uid(next_uid())
+                                .set_data_type(fe::DataType_t::INT32));
+    q_tensor.set_ragged_offset(offset_q);
+    k_tensor.set_ragged_offset(offset_k);
+    v_tensor.set_ragged_offset(offset_v);
+  }
+
   // Setting seed and offset
   std::shared_ptr<Tensor_attributes> seed_tensor;
   std::shared_ptr<Tensor_attributes> offset_tensor;
@@ -5100,6 +5136,10 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
       graph.sdpa(q_tensor, k_tensor, v_tensor, sdpa_options);
 
   // Set output attributes.
+  if (is_packed && is_padding) {
+    o_tensor.set_ragged_offset(offset_o);
+  }
+
   o_tensor->set_name("O")
       .set_output(true)
       .set_dim(o_descriptor.dimensions())
@@ -5291,7 +5331,8 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
     const std::optional<dnn::TensorDescriptor> bias_descriptor,
     std::optional<double> dropout_rate, std::optional<int64_t> seed,
     double scale, bool use_dropout, bool use_bias, dnn::FMHAMaskKind mask_type,
-    bool force_deterministic, const int sliding_window_length) {
+    bool force_deterministic, const int sliding_window_length,
+    const bool is_packed) {
 #if CUDNN_VERSION >= 90000
   if (VLOG_IS_ON(4)) {
     VLOG(4) << "\n bmm1_grad_gemm1_rhs(q): " << q_desc.ToString()
@@ -5415,9 +5456,12 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
   // Setting actual seqlen
   bool is_padding = mask_type == dnn::FMHAMaskKind::PADDING ||
                     mask_type == dnn::FMHAMaskKind::PADDING_CAUSAL;
+
+  // Get batch size
+  auto q_dim = q_desc.GetCudnnCompatibleDimensions(false);
+  auto b = q_dim[0];
+
   if (is_padding) {
-    auto q_dim = q_desc.GetCudnnCompatibleDimensions(false);
-    auto b = q_dim[0];
     auto seq_q_tensor =
         graph.tensor(Tensor_attributes()
                          .set_name("seq_q")
@@ -5435,6 +5479,39 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
     sdpa_backward_options.set_padding_mask(true);
     sdpa_backward_options.set_seq_len_q(seq_q_tensor);
     sdpa_backward_options.set_seq_len_kv(seq_kv_tensor);
+  }
+
+  std::shared_ptr<Tensor_attributes> offset_q, offset_k, offset_v;
+  if (is_packed && is_padding) {
+    offset_q = graph.tensor(Tensor_attributes()
+                                .set_name("offset_q")
+                                .set_dim({b + 1, 1, 1, 1})
+                                .set_stride({1, 1, 1, 1})
+                                .set_uid(next_uid())
+                                .set_data_type(fe::DataType_t::INT32));
+    offset_k = graph.tensor(Tensor_attributes()
+                                .set_name("offset_k")
+                                .set_dim({b + 1, 1, 1, 1})
+                                .set_stride({1, 1, 1, 1})
+                                .set_uid(next_uid())
+                                .set_data_type(fe::DataType_t::INT32));
+    offset_v = graph.tensor(Tensor_attributes()
+                                .set_name("offset_v")
+                                .set_dim({b + 1, 1, 1, 1})
+                                .set_stride({1, 1, 1, 1})
+                                .set_uid(next_uid())
+                                .set_data_type(fe::DataType_t::INT32));
+    auto offset_o = graph.tensor(Tensor_attributes()
+                                     .set_name("offset_o")
+                                     .set_dim({b + 1, 1, 1, 1})
+                                     .set_stride({1, 1, 1, 1})
+                                     .set_uid(next_uid())
+                                     .set_data_type(fe::DataType_t::INT32));
+    q.set_ragged_offset(offset_q);
+    k.set_ragged_offset(offset_k);
+    v.set_ragged_offset(offset_v);
+    o.set_ragged_offset(offset_o);
+    dO.set_ragged_offset(offset_o);
   }
   // Setting seed and offset
   std::shared_ptr<Tensor_attributes> seed_tensor;
@@ -5471,6 +5548,11 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
   auto [dQ, dK, dV] =
       graph.sdpa_backward(q, k, v, o, dO, stats, sdpa_backward_options);
 
+  if (is_packed && is_padding) {
+    dQ.set_ragged_offset(offset_q);
+    dK.set_ragged_offset(offset_k);
+    dV.set_ragged_offset(offset_v);
+  }
   dQ->set_output(true)
       .set_dim(dq_desc.dimensions())
       .set_stride(dq_desc.GetLogicalStrides())

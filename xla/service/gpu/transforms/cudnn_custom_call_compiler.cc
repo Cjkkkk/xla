@@ -149,12 +149,13 @@ absl::StatusOr<se::gpu::CudnnGraph> HloCustomCallToCuDnnGraph(
         GetDNNFmhaMaskKindFromCudnnFmhaMaskKind(cudnn_mask_type));
 
     const int sliding_window_length = config.sliding_window_length();
+    const bool is_packed = config.is_packed();
     TF_ASSIGN_OR_RETURN(
         se::gpu::CudnnGraph graph,
         se::gpu::GetCudnnFlashAttentionOperationGraph(
             dnn_support, lhs_bmm1, rhs_bmm1, rhs_bmm2, output, bias, activation,
             static_cast<float>(config.fmha_scale()), dropout_rate > 0.0,
-            dropout_rate, dnn_mask_type, sliding_window_length));
+            dropout_rate, dnn_mask_type, sliding_window_length, is_packed));
     return std::move(graph);
   } else if (IsFwdCustomCallTofMHAF8(*custom_call)) {
     TF_ASSIGN_OR_RETURN(
@@ -305,6 +306,7 @@ absl::StatusOr<se::gpu::CudnnGraph> HloCustomCallToCuDnnGraph(
         GetDNNFmhaMaskKindFromCudnnFmhaMaskKind(cudnn_mask_type));
 
     const int sliding_window_length = config.sliding_window_length();
+    const bool is_packed = config.is_packed();
     TF_ASSIGN_OR_RETURN(
         se::gpu::CudnnGraph graph,
         se::gpu::GetCudnnFlashAttentionBackwardOperationGraph(
@@ -312,7 +314,8 @@ absl::StatusOr<se::gpu::CudnnGraph> HloCustomCallToCuDnnGraph(
             bmm2_grad_gemm1_lhs, bmm2_grad_gemm2_rhs, d_output, d_bmm1_lhs,
             d_bmm1_rhs, d_bmm2_rhs, bias, dropout_rate, config.seed(),
             config.fmha_scale(), dropout_rate > 0.0, bias != std::nullopt,
-            dnn_mask_type, force_deterministic, sliding_window_length));
+            dnn_mask_type, force_deterministic, sliding_window_length,
+            is_packed));
     return std::move(graph);
   }
 }
