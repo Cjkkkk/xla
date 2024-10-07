@@ -5074,7 +5074,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     sdpa_options.set_seq_len_kv(seq_kv_tensor);
   }
 
-  std::shared_ptr<Tensor_attributes> offset_o;
+  std::shared_ptr<Tensor_attributes> offset_o, offset_stats;
   if (is_packed && is_padding) {
     auto offset_q = graph.tensor(Tensor_attributes()
                                      .set_name("offset_q")
@@ -5096,6 +5096,12 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
                                      .set_data_type(fe::DataType_t::INT32));
     offset_o = graph.tensor(Tensor_attributes()
                                 .set_name("offset_o")
+                                .set_dim({b + 1, 1, 1, 1})
+                                .set_stride({1, 1, 1, 1})
+                                .set_uid(next_uid())
+                                .set_data_type(fe::DataType_t::INT32));
+    offset_stats = graph.tensor(Tensor_attributes()
+                                .set_name("offset_stats")
                                 .set_dim({b + 1, 1, 1, 1})
                                 .set_stride({1, 1, 1, 1})
                                 .set_uid(next_uid())
@@ -5138,6 +5144,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
   // Set output attributes.
   if (is_packed && is_padding) {
     o_tensor.set_ragged_offset(offset_o);
+    stats_tensor.set_ragged_offset(offset_stats);
   }
 
   o_tensor->set_name("O")
@@ -5507,10 +5514,17 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
                                      .set_stride({1, 1, 1, 1})
                                      .set_uid(next_uid())
                                      .set_data_type(fe::DataType_t::INT32));
+    auto offset_stats = graph.tensor(Tensor_attributes()
+                                     .set_name("offset_stats")
+                                     .set_dim({b + 1, 1, 1, 1})
+                                     .set_stride({1, 1, 1, 1})
+                                     .set_uid(next_uid())
+                                     .set_data_type(fe::DataType_t::INT32));
     q.set_ragged_offset(offset_q);
     k.set_ragged_offset(offset_k);
     v.set_ragged_offset(offset_v);
     o.set_ragged_offset(offset_o);
+    stats.set_ragged_offset(offset_stats);
     dO.set_ragged_offset(offset_o);
   }
   // Setting seed and offset
@@ -5543,6 +5557,10 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
 
   if (sliding_window_length > 0) {
     sdpa_backward_options.set_sliding_window_length(sliding_window_length);
+  }
+
+  if (max_total_seq_len_q > 0) {
+    sdpa_backward_options.set_max_total_seq_len_q(max_total_seq_len_q);
   }
 
   auto [dQ, dK, dV] =
