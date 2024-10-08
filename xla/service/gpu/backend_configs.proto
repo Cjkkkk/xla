@@ -267,7 +267,7 @@ message CudnnfMHABackendConfig {
   int32 sliding_window_length = 24;
 
   // Whether QKV has packed layout
-  bool is_packed = 25
+  int32 max_seg_per_batch = 25
 }
 
 // Generic backend config for XLA:GPU

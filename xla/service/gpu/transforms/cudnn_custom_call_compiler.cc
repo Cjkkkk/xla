@@ -149,7 +149,7 @@ absl::StatusOr<se::gpu::CudnnGraph> HloCustomCallToCuDnnGraph(
         GetDNNFmhaMaskKindFromCudnnFmhaMaskKind(cudnn_mask_type));
 
     const int sliding_window_length = config.sliding_window_length();
-    const bool is_packed = config.is_packed();
+    const int max_seg_per_batch = config.max_seg_per_batch();
     TF_ASSIGN_OR_RETURN(
         se::gpu::CudnnGraph graph,
         se::gpu::GetCudnnFlashAttentionOperationGraph(
@@ -306,7 +306,7 @@ absl::StatusOr<se::gpu::CudnnGraph> HloCustomCallToCuDnnGraph(
         GetDNNFmhaMaskKindFromCudnnFmhaMaskKind(cudnn_mask_type));
 
     const int sliding_window_length = config.sliding_window_length();
-    const bool is_packed = config.is_packed();
+    const int max_seg_per_batch = config.max_seg_per_batch();
     TF_ASSIGN_OR_RETURN(
         se::gpu::CudnnGraph graph,
         se::gpu::GetCudnnFlashAttentionBackwardOperationGraph(
