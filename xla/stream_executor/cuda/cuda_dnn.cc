@@ -5022,9 +5022,9 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
   std::vector<int64_t> v_strides = v_descriptor.GetCudnnCompatibleStrides(false);
 
   if (max_seg_per_batch > 1) {
-    FixDimsAndStridesForRaggedOffset(q_dims, q_strides);
-    FixDimsAndStridesForRaggedOffset(k_dims, k_strides);
-    FixDimsAndStridesForRaggedOffset(v_dims, v_strides);
+    FixDimsAndStridesForRaggedOffset(q_dims, q_strides, max_seg_per_batch);
+    FixDimsAndStridesForRaggedOffset(k_dims, k_strides, max_seg_per_batch);
+    FixDimsAndStridesForRaggedOffset(v_dims, v_strides, max_seg_per_batch);
   }
 
   std::shared_ptr<Tensor_attributes> q_tensor =
@@ -5101,16 +5101,16 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
                                      .set_dim({b + 1, 1, 1, 1})
                                      .set_stride({1, 1, 1, 1})
                                      .set_uid(next_uid())
-                                     .set_data_type(fe::DataType_t::INT32));
+                                     .set_data_type(cudnn_frontend::DataType_t::INT32));
     auto offset_kv = graph.tensor(Tensor_attributes()
                                      .set_name("offset_kv")
                                      .set_dim({b + 1, 1, 1, 1})
                                      .set_stride({1, 1, 1, 1})
                                      .set_uid(next_uid())
-                                     .set_data_type(fe::DataType_t::INT32));
-    q_tensor.set_ragged_offset(offset_q);
-    k_tensor.set_ragged_offset(offset_kv);
-    v_tensor.set_ragged_offset(offset_kv);
+                                     .set_data_type(cudnn_frontend::DataType_t::INT32));
+    q_tensor->set_ragged_offset(offset_q);
+    k_tensor->set_ragged_offset(offset_kv);
+    v_tensor->set_ragged_offset(offset_kv);
   }
 
   // Setting seed and offset
@@ -5147,9 +5147,9 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
   auto o_strides = o_descriptor.GetLogicalStrides();
 
   if (max_seg_per_batch > 1) {
-    FixDimsAndStridesForRaggedOffset(o_dims, o_strides);
-    o_tensor.set_ragged_offset(offset_q);
-    stats_tensor.set_ragged_offset(offset_q);
+    FixDimsAndStridesForRaggedOffset(o_dims, o_strides, max_seg_per_batch);
+    o_tensor->set_ragged_offset(offset_q);
+    stats_tensor->set_ragged_offset(offset_q);
   }
   // Set output attributes.
   o_tensor->set_name("O")
@@ -5163,7 +5163,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     auto stat_dims = stats_descriptor->dimensions();
     auto stat_strides = stats_descriptor->GetLogicalStrides();
     if (max_seg_per_batch > 1) {
-      FixDimsAndStridesForRaggedOffset(stat_dims, stat_strides);
+      FixDimsAndStridesForRaggedOffset(stat_dims, stat_strides, max_seg_per_batch);
     }
     stat_dims.push_back(1);
     stat_strides.push_back(1);
@@ -5402,15 +5402,15 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
   stats_strides[3] = 1;
 
   if (max_seg_per_batch > 1) {
-    FixDimsAndStridesForRaggedOffset(q_dims, q_strides);
-    FixDimsAndStridesForRaggedOffset(k_dims, k_strides);
-    FixDimsAndStridesForRaggedOffset(v_dims, v_strides);
-    FixDimsAndStridesForRaggedOffset(p_dims, p_strides);
-    FixDimsAndStridesForRaggedOffset(do_dims, do_strides);
-    FixDimsAndStridesForRaggedOffset(dq_dims, dq_strides);
-    FixDimsAndStridesForRaggedOffset(dk_dims, dk_strides);
-    FixDimsAndStridesForRaggedOffset(dv_dims, dv_strides);
-    FixDimsAndStridesForRaggedOffset(stats_dims, stats_strides);
+    FixDimsAndStridesForRaggedOffset(q_dims, q_strides, max_seg_per_batch);
+    FixDimsAndStridesForRaggedOffset(k_dims, k_strides, max_seg_per_batch);
+    FixDimsAndStridesForRaggedOffset(v_dims, v_strides, max_seg_per_batch);
+    FixDimsAndStridesForRaggedOffset(p_dims, p_strides, max_seg_per_batch);
+    FixDimsAndStridesForRaggedOffset(do_dims, do_strides, max_seg_per_batch);
+    FixDimsAndStridesForRaggedOffset(dq_dims, dq_strides, max_seg_per_batch);
+    FixDimsAndStridesForRaggedOffset(dk_dims, dk_strides, max_seg_per_batch);
+    FixDimsAndStridesForRaggedOffset(dv_dims, dv_strides, max_seg_per_batch);
+    FixDimsAndStridesForRaggedOffset(stats_dims, stats_strides, max_seg_per_batch);
   }
   bool is_causal = mask_type == dnn::FMHAMaskKind::CAUSAL ||
                    mask_type == dnn::FMHAMaskKind::PADDING_CAUSAL;
@@ -5520,7 +5520,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
     sdpa_backward_options.set_seq_len_kv(seq_kv_tensor);
   }
 
-  std::shared_ptr<Tensor_attributes> offset_q, offset_k, offset_v;
+  std::shared_ptr<Tensor_attributes> offset_q, offset_kv;
   if (max_seg_per_batch > 1) {
     // Get batch size
     auto b = q_dims[0];
@@ -5529,19 +5529,19 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
                                 .set_dim({b + 1, 1, 1, 1})
                                 .set_stride({1, 1, 1, 1})
                                 .set_uid(next_uid())
-                                .set_data_type(fe::DataType_t::INT32));
+                                .set_data_type(cudnn_frontend::DataType_t::INT32));
     offset_kv = graph.tensor(Tensor_attributes()
                                 .set_name("offset_k")
                                 .set_dim({b + 1, 1, 1, 1})
                                 .set_stride({1, 1, 1, 1})
                                 .set_uid(next_uid())
-                                .set_data_type(fe::DataType_t::INT32));
-    q.set_ragged_offset(offset_q);
-    k.set_ragged_offset(offset_kv);
-    v.set_ragged_offset(offset_kv);
-    o.set_ragged_offset(offset_q);
-    stats.set_ragged_offset(offset_q);
-    dO.set_ragged_offset(offset_q);
+                                .set_data_type(cudnn_frontend::DataType_t::INT32));
+    q->set_ragged_offset(offset_q);
+    k->set_ragged_offset(offset_kv);
+    v->set_ragged_offset(offset_kv);
+    o->set_ragged_offset(offset_q);
+    stats->set_ragged_offset(offset_q);
+    dO->set_ragged_offset(offset_q);
   }
   // Setting seed and offset
   std::shared_ptr<Tensor_attributes> seed_tensor;
@@ -5575,21 +5575,21 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
     sdpa_backward_options.set_sliding_window_length(sliding_window_length);
   }
 
-  if (max_total_seq_len_q > 0) {
-    // Get batch size
-    auto b = q_dims[0];
-    auto seq_q = q_dims[2];
-    auto max_total_seq_len_q = b * seq_q;
-    sdpa_backward_options.set_max_total_seq_len_q(max_total_seq_len_q);
-  }
+  // if (max_total_seq_len_q > 0) {
+  //   // Get batch size
+  //   auto b = q_dims[0];
+  //   auto seq_q = q_dims[2];
+  //   auto max_total_seq_len_q = b * seq_q;
+  //   sdpa_backward_options.set_max_total_seq_len_q(max_total_seq_len_q);
+  // }
 
   auto [dQ, dK, dV] =
       graph.sdpa_backward(q, k, v, o, dO, stats, sdpa_backward_options);
 
   if (max_seg_per_batch > 1) {
-    dQ.set_ragged_offset(offset_q);
-    dK.set_ragged_offset(offset_kv);
-    dV.set_ragged_offset(offset_kv);
+    dQ->set_ragged_offset(offset_q);
+    dK->set_ragged_offset(offset_kv);
+    dV->set_ragged_offset(offset_kv);
   }
   dQ->set_output(true)
       .set_dim(dq_dims)
