@@ -5043,7 +5043,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
   std::shared_ptr<Tensor_attributes> v_tensor =
       graph.tensor(Tensor_attributes()
                        .set_name("V")
-                       .set_dim(v_strides)
+                       .set_dim(v_dims)
                        .set_stride(v_strides)
                        .set_uid(next_uid()));
 
