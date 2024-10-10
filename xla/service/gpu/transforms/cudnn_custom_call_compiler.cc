@@ -237,6 +237,12 @@ absl::StatusOr<se::gpu::CudnnGraph> HloCustomCallToCuDnnGraph(
       // skip q_seqlen and kv_seqlen
       input_index += 2;
     }
+
+    const int max_seg_per_batch = config.max_seg_per_batch();
+    if (max_seg_per_batch > 1) {
+      // skip q_offsets and kv_offsets
+      input_index += 2;
+    }
     TF_RET_CHECK(input_index == custom_call->operand_count());
 
     int output_index = 0;
@@ -306,7 +312,6 @@ absl::StatusOr<se::gpu::CudnnGraph> HloCustomCallToCuDnnGraph(
         GetDNNFmhaMaskKindFromCudnnFmhaMaskKind(cudnn_mask_type));
 
     const int sliding_window_length = config.sliding_window_length();
-    const int max_seg_per_batch = config.max_seg_per_batch();
     TF_ASSIGN_OR_RETURN(
         se::gpu::CudnnGraph graph,
         se::gpu::GetCudnnFlashAttentionBackwardOperationGraph(
