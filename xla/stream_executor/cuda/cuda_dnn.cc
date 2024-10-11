@@ -5143,7 +5143,6 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
   if (max_seg_per_batch > 1) {
     FixDimsForRaggedOffset(o_dims, max_seg_per_batch);
     o_tensor->set_ragged_offset(offset_q);
-    stats_tensor->set_ragged_offset(offset_q);
   }
   // Set output attributes.
   o_tensor->set_name("O")
@@ -5156,9 +5155,6 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
         ToCudnnFrontendDataType(stats_descriptor->type());
     auto stat_dims = stats_descriptor->dimensions();
     auto stat_strides = stats_descriptor->GetLogicalStrides();
-    if (max_seg_per_batch > 1) {
-      FixDimsForRaggedOffset(stat_dims, max_seg_per_batch);
-    }
     stat_dims.push_back(1);
     stat_strides.push_back(1);
     stats_tensor->set_name("stats")
@@ -5442,7 +5438,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
       graph.tensor(Tensor_attributes()
                        .set_name("dO")
                        .set_dim(do_dims)
-                       .set_stride(do_strides)
+                       .set_stride(do_desc.GetCudnnCompatibleStrides(false))
                        .set_uid(next_uid())
                        .set_data_type(ioDataType));
   std::shared_ptr<Tensor_attributes> d_bias_tensor;
