@@ -5064,8 +5064,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
   // Setting actual seqlen
   bool is_padding = mask_type == dnn::FMHAMaskKind::PADDING ||
                     mask_type == dnn::FMHAMaskKind::PADDING_CAUSAL;
-
-  if (is_padding) {
+  if (is_padding || max_seg_per_batch > 1) {
     // Get batch size
     auto b = q_dims[0];
     auto seq_q_tensor =
@@ -5481,7 +5480,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
   bool is_padding = mask_type == dnn::FMHAMaskKind::PADDING ||
                     mask_type == dnn::FMHAMaskKind::PADDING_CAUSAL;
 
-  if (is_padding) {
+  if (is_padding || max_seg_per_batch > 1) {
     // Get batch size
     auto b = q_dims[0];
     auto seq_q_tensor =
@@ -5523,7 +5522,6 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
     k->set_ragged_offset(offset_kv);
     v->set_ragged_offset(offset_kv);
     o->set_ragged_offset(offset_q);
-    stats->set_ragged_offset(offset_q);
     dO->set_ragged_offset(offset_q);
   }
   // Setting seed and offset

@@ -231,14 +231,15 @@ absl::StatusOr<se::gpu::CudnnGraph> HloCustomCallToCuDnnGraph(
     // Unused fwd_output_shape
     ++input_index;
 
+    const int max_seg_per_batch = config.max_seg_per_batch();
     if (config.mask_type() == xla::gpu::CudnnfMHABackendConfig::PADDING ||
         config.mask_type() ==
-            xla::gpu::CudnnfMHABackendConfig::PADDING_CAUSAL) {
+            xla::gpu::CudnnfMHABackendConfig::PADDING_CAUSAL ||
+        max_seg_per_batch > 1) {
       // skip q_seqlen and kv_seqlen
       input_index += 2;
     }
 
-    const int max_seg_per_batch = config.max_seg_per_batch();
     if (max_seg_per_batch > 1) {
       // skip q_offsets and kv_offsets
       input_index += 2;
