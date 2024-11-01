@@ -950,3 +950,4 @@ batched_block_until_ready = _xla.batched_block_until_ready
 check_and_canonicalize_memory_kind = _xla.check_and_canonicalize_memory_kind
 Layout = _xla.Layout
 custom_call_targets = _xla.custom_call_targets
+check_is_cudnn_fmha_supported = _xla.check_is_cudnn_fmha_supported

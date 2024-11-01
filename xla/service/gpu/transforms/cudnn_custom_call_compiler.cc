@@ -54,12 +54,13 @@ namespace gpu {
 
 namespace {
 
-// absl::Status IsCudnnSDPASupported(const string& backend_config_str) {
-//   xla::gpu::GpuBackendConfig backend_config;
-//   TF_RETURN_IF_ERROR(
-//         tsl::HumanReadableJsonToProto(backend_config_str, &backend_config));
-//   // check here
-// }
+absl::Status IsCudnnFmhaSupported(const string& backend_config_str,
+  const string& cudnn_version, const string& compute_capability) {
+  xla::gpu::GpuBackendConfig backend_config;
+  TF_RETURN_IF_ERROR(
+        tsl::HumanReadableJsonToProto(backend_config_str, &backend_config));
+  return absl::OkStatus();
+}
 
 
 inline absl::StatusOr<CudnnfMHAMaskKind> AsCudnnFmhaMaskKind(

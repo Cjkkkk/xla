@@ -78,6 +78,7 @@ limitations under the License.
 #include "xla/service/hlo_graph_dumper.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/service/name_uniquer.h"
+#include "xla/service/gpu/transforms/cudnn_custom_call_compiler.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
 #include "xla/tsl/lib/strings/proto_serialization.h"
@@ -1092,6 +1093,8 @@ void BuildXlaCompilerSubmodule(nb::module_& m) {
         return targets;
       },
       nb::arg("platform"));
+
+  m.def("check_is_cudnn_fmha_supported", &xla::gpu::IsCudnnFmhaSupported);
 
   nb::class_<DebugOptions>(m, "DebugOptions")
       .def("__repr__", &DebugOptions::DebugString)
