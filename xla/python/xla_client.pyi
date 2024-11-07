@@ -290,4 +290,10 @@ def custom_call_targets(platform: str) -> dict[str, Any]: ...
 
 def encode_inspect_sharding_callback(handler: Any) -> bytes: ...
 
+def check_is_cudnn_fmha_supported(
+    backend_config_str: str,
+    compute_capability: str,
+    cudnn_version: str,
+) -> None: ...
+
 register_custom_call_partitioner = _xla.register_custom_call_partitioner

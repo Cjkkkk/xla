@@ -1094,7 +1094,16 @@ void BuildXlaCompilerSubmodule(nb::module_& m) {
       },
       nb::arg("platform"));
 
-  m.def("check_is_cudnn_fmha_supported", &xla::gpu::IsCudnnFmhaSupported);
+  m.def(
+      "check_is_cudnn_fmha_supported",
+      [](const std::string& backend_config_str,
+         const std::string& compute_capability,
+         const std::string& cudnn_version) {
+        xla::ThrowIfError(xla::gpu::IsCudnnFmhaSupported(
+            backend_config_str, compute_capability, cudnn_version));
+      },
+      nb::arg("backend_config_str"), nb::arg("compute_capability"),
+      nb::arg("cudnn_version"));
 
   nb::class_<DebugOptions>(m, "DebugOptions")
       .def("__repr__", &DebugOptions::DebugString)

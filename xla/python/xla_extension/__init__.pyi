@@ -273,6 +273,13 @@ class CompileOptions:
 def register_custom_call_target(
     fn_name: str, capsule: Any, platform: str, api_version: int = ...,
 ) -> _Status: ...
+
+def check_is_cudnn_fmha_supported(
+    backend_config_str: str,
+    compute_capability: str,
+    cudnn_version: str,
+) -> _Status: ...
+
 def register_custom_call_partitioner(
     name: str,
     prop_user_sharding: Callable,

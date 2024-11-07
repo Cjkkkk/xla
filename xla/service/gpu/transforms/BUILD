@@ -1326,6 +1326,7 @@ cc_library(
         "@tsl//tsl/platform:errors",
         "@tsl//tsl/platform:statusor",
     ]) + ["@com_google_absl//absl/container:flat_hash_map"],
+    visibility = ["//visibility:public"],
 )
 
 cc_library(

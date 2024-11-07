@@ -28,6 +28,10 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
+absl::Status IsCudnnFmhaSupported(const std::string& backend_config_str,
+                                  const std::string& compute_capability,
+                                  const std::string& cudnn_version);
+
 // Compile cuDNN custom calls to binaries and serialize them.
 // Also adjust them in HLO to have correct workspace size.
 class CuDnnCustomCallCompiler : public HloModulePass {

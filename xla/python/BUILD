@@ -1092,7 +1092,7 @@ cc_library(
         "//xla/service:hlo_module_config",
         "//xla/service:hlo_proto_cc",
         "//xla/service:name_uniquer",
-        "//xla/service/gpu/transforms:cudnn_custom_call_compiler"
+        "//xla/service/gpu/transforms:cudnn_custom_call_compiler",
         "//xla/tsl/lib/strings:proto_serialization",
         "@tsl//tsl/platform:env",
         "@tsl//tsl/platform:errors",

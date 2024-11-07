@@ -28,6 +28,9 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "tsl/platform/errors.h"
+#include "tsl/platform/human_readable_json.h"
+#include "tsl/platform/statusor.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_clone_context.h"
@@ -46,22 +49,11 @@ limitations under the License.
 #include "xla/stream_executor/cuda/cudnn_frontend_helpers.h"
 #include "xla/stream_executor/dnn.h"
 #include "xla/util.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 namespace gpu {
 
 namespace {
-
-absl::Status IsCudnnFmhaSupported(const string& backend_config_str,
-  const string& cudnn_version, const string& compute_capability) {
-  xla::gpu::GpuBackendConfig backend_config;
-  TF_RETURN_IF_ERROR(
-        tsl::HumanReadableJsonToProto(backend_config_str, &backend_config));
-  return absl::OkStatus();
-}
-
 
 inline absl::StatusOr<CudnnfMHAMaskKind> AsCudnnFmhaMaskKind(
     CudnnfMHABackendConfig_MaskType mask_type) {
@@ -456,6 +448,36 @@ class CuDnnCustomCallVisitor : public DfsHloRewriteVisitor {
 };
 
 }  // namespace
+
+absl::Status IsCudnnFmhaSupported(int64_t batch, int64_t num_heads,
+                                  int64_t num_gqa_groups, int64_t seqlen_q,
+                                  int64_t seqlen_kv, int64_t head_dim,
+                                  const std::string &backend_config_str,
+                                  const std::string &compute_capability,
+                                  const std::string &cudnn_version) {
+  xla::gpu::GpuBackendConfig backend_config;
+  TF_RETURN_IF_ERROR(
+      tsl::HumanReadableJsonToProto(backend_config_str, &backend_config));
+  const xla::gpu::CudnnfMHABackendConfig &config =
+      backend_config.cudnn_fmha_backend_config();
+
+  // Arch
+  if (compute_capability < 80) {
+    return errors::Unimplemented(
+        "Require at least Ampere arch to run cuDNN flash attention.");
+  }
+  if (cudnn_version < 8904) {
+    return errors::Unimplemented(
+        "Require at least cuDNN 8.9.4 to run flash attention.");
+  }
+  if (head_dim % 8 != 0) {
+
+  }
+
+  std::cerr << "fmha scale: " << static_cast<float>(config.fmha_scale())
+            << "\n";
+  return absl::OkStatus();
+}
 
 absl::StatusOr<bool> CuDnnCustomCallCompiler::Run(
     HloModule *module,
