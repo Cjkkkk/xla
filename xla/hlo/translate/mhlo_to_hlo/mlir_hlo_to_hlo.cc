@@ -2337,11 +2337,11 @@ LogicalResult ExportXlaOp(CustomCallOp op, OpLoweringContext ctx) {
 
   // Custom call can be exported either with called computation or with layout
   // attributes. The XlaBuilder API does not allow both.
-  if (!op.getCalledComputations().empty() && op.getOperandLayouts() &&
-      op.getResultLayouts()) {
-    return op.emitOpError() << "cannot export if both called computation and "
-                               "layouts are specified";
-  }
+  // if (!op.getCalledComputations().empty() && op.getOperandLayouts() &&
+  //     op.getResultLayouts()) {
+  //   return op.emitOpError() << "cannot export if both called computation and "
+  //                              "layouts are specified";
+  // }
 
   auto xla_api_version = xla::ConvertCustomCallApiVersion(op.getApiVersion());
   if (!xla_api_version.ok()) return failure();

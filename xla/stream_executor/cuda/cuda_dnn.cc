@@ -4974,6 +4974,7 @@ void FixDimsForRaggedOffset(std::vector<int64_t>& dims, int max_reg_per_batch) {
   dims[0] *= max_reg_per_batch;
 }
 
+
 absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     dnn::DnnSupport& dnn_support,
     const dnn::MatmulTensorDescriptor& q_descriptor,
@@ -4984,7 +4985,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     const std::optional<dnn::TensorDescriptor> stats_descriptor, double scale,
     const bool use_dropout, const std::optional<double> dropout_rate,
     const dnn::FMHAMaskKind mask_type, const int sliding_window_length,
-    const int max_seg_per_batch) {
+    const int max_seg_per_batch, AttentionScoreModifier_t score_modifier) {
   using cudnn_frontend::graph::Tensor_attributes;
 
 #if CUDNN_VERSION >= 90000
@@ -5138,6 +5139,10 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
 
   if (sliding_window_length > 0) {
     sdpa_options.set_sliding_window_length(sliding_window_length);
+  }
+
+  if (score_modifier != nullptr) {
+    sdpa_options.set_score_mod(score_modifier);
   }
   // Add SDPA to the graph.
   auto [o_tensor, stats_tensor] =
@@ -5614,7 +5619,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
     std::optional<double> dropout_rate, std::optional<int64_t> seed,
     double scale, bool use_dropout, bool use_bias, dnn::FMHAMaskKind mask_type,
     bool force_deterministic, const int sliding_window_length,
-    const int max_seg_per_batch) {
+    const int max_seg_per_batch, AttentionScoreModifier_t score_modifier) {
 #if CUDNN_VERSION >= 90000
   VLOG(4) << "\n bmm1_grad_gemm1_rhs(q): " << q_desc.ToString()
           << "\n bmm1_grad_gemm2_rhs(k): " << k_desc.ToString()

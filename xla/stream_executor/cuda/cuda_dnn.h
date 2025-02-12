@@ -698,6 +698,10 @@ class CudnnSupport : public dnn::DnnSupport {
   void operator=(const CudnnSupport&) = delete;
 };
 
+using Tensor_t = std::shared_ptr<Tensor_attributes>;
+using Graph_t  = std::shared_ptr<Graph>;
+using AttentionScoreModifier_t = std::function<Tensor_t(Graph_t, Tensor_t)>;
+
 absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     dnn::DnnSupport& dnn_support,
     const dnn::MatmulTensorDescriptor& q_descriptor,
@@ -708,7 +712,8 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     const std::optional<dnn::TensorDescriptor> stats_descriptor, double scale,
     const bool use_dropout, const std::optional<double> dropout_rate,
     const dnn::FMHAMaskKind mask_type, const int sliding_window_length,
-    const int max_seg_per_batch);
+    const int max_seg_per_batch,
+    AttentionScoreModifier_t score_modifer);
 
 absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionF8OperationGraph(
     dnn::DnnSupport& dnn_support,
@@ -731,7 +736,8 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
     std::optional<double> dropout_rate, std::optional<int64_t> seed,
     double scale, bool use_dropout, bool use_bias,
     const dnn::FMHAMaskKind mask_type, bool force_deterministic,
-    const int sliding_window_length, const int max_seg_per_batch);
+    const int sliding_window_length, const int max_seg_per_batch,
+    AttentionScoreModifier_t score_modifer);
 
 absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardF8OperationGraph(
     dnn::DnnSupport& dnn_support, const dnn::MatmulTensorDescriptor& q_desc,
