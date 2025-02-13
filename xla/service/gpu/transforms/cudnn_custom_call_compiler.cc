@@ -98,6 +98,186 @@ absl::StatusOr<MatmulTensorDescriptor> MatmulTensorDescriptorFor(
                     : dnums.rhs_contracting_dimensions());
 }
 
+namespace fe = cudnn_frontend;
+namespace graph = fe::graph;
+
+inline std::optional<fe::PointwiseMode_t> GetElementwiseMode(
+    const HloInstruction& instruction) {
+  const HloOpcode opcode = instruction.opcode();
+  using m = fe::PointwiseMode_t;
+  switch (opcode) {
+    case HloOpcode::kAbs:
+      return m::ABS;
+    case HloOpcode::kAdd:
+      return m::ADD;
+    case HloOpcode::kCeil:
+      return m::CEIL;
+    case HloOpcode::kCompare:
+      switch (instruction.comparison_direction()) {
+        case Comparison::Direction::kEq:
+          return m::CMP_EQ;
+        case Comparison::Direction::kNe:
+          return m::CMP_NEQ;
+        case Comparison::Direction::kGe:
+          return m::CMP_GE;
+        case Comparison::Direction::kGt:
+          return m::CMP_GT;
+        case Comparison::Direction::kLe:
+          return m::CMP_LE;
+        case Comparison::Direction::kLt:
+          return m::CMP_LT;
+      }
+      break;
+    case HloOpcode::kConvert:
+      return m::IDENTITY;
+    case HloOpcode::kCos:
+      return m::COS;
+    case HloOpcode::kDivide:
+      return m::DIV;
+    case HloOpcode::kExp:
+      return m::EXP;
+    case HloOpcode::kFloor:
+      return m::FLOOR;
+    case HloOpcode::kLog:
+      return m::LOG;
+    case HloOpcode::kMaximum:
+      return m::MAX;
+    case HloOpcode::kMinimum:
+      return m::MIN;
+    case HloOpcode::kMultiply:
+      return m::MUL;
+    case HloOpcode::kNegate:
+      return m::NEG;
+    case HloOpcode::kPower:
+      return m::POW;
+    case HloOpcode::kRsqrt:
+      return m::RSQRT;
+#if CUDNN_VERSION >= 90100
+    case HloOpcode::kSelect:
+      return m::BINARY_SELECT;
+#endif  // CUDNN_VERSION
+    case HloOpcode::kSin:
+      return m::SIN;
+    case HloOpcode::kSqrt:
+      return m::SQRT;
+    case HloOpcode::kSubtract:
+      return m::SUB;
+    case HloOpcode::kTan:
+      return m::TAN;
+    case HloOpcode::kTanh:
+      return m::TANH_FWD;
+    default:
+      return std::nullopt;
+  }
+}
+
+inline std::optional<fe::DataType_t> ToCudnnDataType(const PrimitiveType type) {
+  using t = fe::DataType_t;
+  switch (type) {
+    case PrimitiveType::F32:
+      return t::FLOAT;
+    case PrimitiveType::F16:
+      return t::HALF;
+    case PrimitiveType::BF16:
+      return t::BFLOAT16;
+    case PrimitiveType::S32:
+      return t::INT32;
+    case PrimitiveType::S8:
+      return t::INT8;
+    case PrimitiveType::PRED:
+      return t::INT8;
+    case PrimitiveType::F8E5M2:
+      return t::FP8_E5M2;
+    case PrimitiveType::F8E4M3FN:
+      return t::FP8_E4M3;
+    default:
+      return std::nullopt;
+  }
+}
+
+inline std::optional<fe::DataType_t> GetComputeDataType(
+  const PrimitiveType type) {
+  fe::DataType_t compute_dtype = fe::DataType_t::FLOAT;
+  if (primitive_util::IsIntegralType(type)) {
+#if CUDNN_VERSION >= 90100
+    compute_dtype = fe::DataType_t::INT32;
+#else
+    VLOG(3) << "Integer math requires cuDNN 9.1+.";
+    return std::nullopt;
+#endif  // CUDNN_VERSION
+  }
+  return compute_dtype;
+}
+
+std::shared_ptr<fe::graph::Tensor_attributes> BuilScoreModFunc(
+  std::shared_ptr<fe::graph::Graph> graph,
+  std::shared_ptr<fe::graph::Tensor_attributes> attention_score,
+  const HloComputation* computation, int reserved_uid) {
+  std::vector<HloInstruction*> instructions =
+    computation->MakeInstructionPostOrder();
+  absl::flat_hash_map<const HloInstruction*,
+    std::shared_ptr<graph::Tensor_attributes>> hlo_to_cudnn;
+
+  for (const HloInstruction* hlo : instructions) {
+    auto operand = [&hlo_to_cudnn, &hlo](int i) {
+      return hlo_to_cudnn[hlo->operand(i)];
+    };
+    // get data type
+    const std::optional<fe::DataType_t> data_type =
+        ToCudnnDataType(hlo->shape().element_type());
+    if (!data_type.has_value()) {
+      LOG(FATAL) << "Unimplemented data type: " << hlo->shape().element_type();
+    }
+    if (HloPredicateIsOp<HloOpcode::kParameter>(hlo)) {
+      if (hlo->parameter_number() == 0) {
+        // parameter 0 is atten score which is handled by cudnn
+        hlo_to_cudnn[hlo] = attention_score;
+      } else {
+        // parameters managed by user
+        auto shape = hlo->shape();
+        DataType type;
+        auto desc = TensorDescriptor::For(type, hlo->shape().dimensions(),
+                                        hlo->shape().layout().minor_to_major());
+        auto offset = hlo->parameter_number() - 1;
+        hlo_to_cudnn[hlo] = graph->tensor(
+          graph::Tensor_attributes()
+              .set_dim(desc.dimensions())
+              .set_stride(desc.GetLogicalStrides())
+              .set_data_type(*data_type)
+              .set_name(std::string(hlo->name()))
+              .set_uid(se::gpu::CuDnnTensorUID(reserved_uid + offset)));
+      }
+    } else if (hlo->IsElementwise()) {
+      const auto compute_dtype =
+          GetComputeDataType(hlo->shape().element_type());
+      if (!compute_dtype.has_value()) {
+        LOG(FATAL) << "Unsupported compute type.";
+      }
+      const auto mode = GetElementwiseMode(*hlo);
+      if (!mode.has_value()) {
+        LOG(FATAL) << "Unsupported elementwise operation.";
+      }
+      const auto attrs = graph::Pointwise_attributes()
+                              .set_mode(mode.value())
+                              .set_compute_data_type(compute_dtype.value());
+      if (hlo->operand_count() == 1) {
+        hlo_to_cudnn[hlo] = graph->pointwise(operand(0), attrs);
+      } else if (hlo->operand_count() == 2) {
+        hlo_to_cudnn[hlo] = graph->pointwise(operand(0), operand(1), attrs);
+      } else {
+        LOG(FATAL) << "Unimplemented elementwise operation.";
+      }
+    }
+  }
+}
+
+static std::shared_ptr<fe::graph::Tensor_attributes> score_mod_func(
+  std::shared_ptr<fe::graph::Graph> graph,
+  std::shared_ptr<fe::graph::Tensor_attributes> attention_score,
+  const HloComputation* computation, int uid) {
+  return BuilScoreModFunc(graph, attention_score, computation, uid);
+}
+
 absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToForwardFMHA(
     se::dnn::DnnSupport &dnn_support, HloCustomCallInstruction *custom_call) {
   TF_ASSIGN_OR_RETURN(const xla::gpu::CudnnfMHAKind kind,
@@ -132,11 +312,15 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToForwardFMHA(
                                         custom_call->shape(), {1})));
   }
 
+  // QKV
+  int input_index = 3;
   std::optional<se::dnn::TensorDescriptor> bias;
   if (kind == CudnnfMHAKind::kScaleBiasSoftmax ||
       kind == CudnnfMHAKind::kScaleBiasSoftmaxDropout) {
     const HloInstruction &bias_hlo = *custom_call->operand(3);
     TF_ASSIGN_OR_RETURN(bias, TensorDescriptorFor(bias_hlo.shape()));
+    // bias
+    input_index ++;
   }
 
   const double dropout_rate = config.dropout_rate();
@@ -148,13 +332,36 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToForwardFMHA(
 
   const int sliding_window_length = config.sliding_window_length();
   const int max_seg_per_batch = config.max_seg_per_batch();
+
+  if (config.mask_type() == xla::gpu::CudnnfMHABackendConfig::PADDING ||
+      config.mask_type() == xla::gpu::CudnnfMHABackendConfig::PADDING_CAUSAL ||
+      max_seg_per_batch > 1) {
+    // skip q_seqlen and kv_seqlen
+    input_index += 2;
+  }
+
+  if (max_seg_per_batch > 1) {
+    // skip q_offsets and kv_offsets
+    input_index += 2;
+  }
+
+  auto computations = custom_call->called_computations();
+  se::gpu::AttentionScoreModifier_t score_modifier = nullptr;
+  int reserved_score_modifier_inputs = 0;
+  if (computations.size() == 1) {
+    score_modifier = std::bind(score_mod_func, std::placeholders::_1, std::placeholders::_2, computations[0], input_index);
+    reserved_score_modifier_inputs = computations[0]->num_parameters() - 1;
+    input_index += reserved_score_modifier_inputs;
+  }
+
+  TF_RET_CHECK(input_index == custom_call->operand_count());
   TF_ASSIGN_OR_RETURN(
       se::gpu::CudnnGraph graph,
       se::gpu::GetCudnnFlashAttentionOperationGraph(
           dnn_support, lhs_bmm1, rhs_bmm1, rhs_bmm2, output, bias, activation,
           static_cast<float>(config.fmha_scale()), dropout_rate > 0.0,
           dropout_rate, dnn_mask_type, sliding_window_length,
-          max_seg_per_batch));
+          max_seg_per_batch, score_modifier, reserved_score_modifier_inputs));
   return graph;
 }
 
@@ -307,6 +514,7 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToBackwardFMHA(
                       GetDNNFmhaMaskKindFromCudnnFmhaMaskKind(cudnn_mask_type));
 
   const int sliding_window_length = config.sliding_window_length();
+  se::gpu::AttentionScoreModifier_t score_modifier = nullptr;
   TF_ASSIGN_OR_RETURN(
       se::gpu::CudnnGraph graph,
       se::gpu::GetCudnnFlashAttentionBackwardOperationGraph(
@@ -315,7 +523,7 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToBackwardFMHA(
           d_bmm1_rhs, d_bmm2_rhs, bias, dropout_rate, config.seed(),
           config.fmha_scale(), dropout_rate > 0.0, bias != std::nullopt,
           dnn_mask_type, force_deterministic, sliding_window_length,
-          max_seg_per_batch));
+          max_seg_per_batch, score_modifier));
   return graph;
 }
 
