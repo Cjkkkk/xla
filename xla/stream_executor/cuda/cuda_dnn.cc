@@ -4985,7 +4985,8 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     const std::optional<dnn::TensorDescriptor> stats_descriptor, double scale,
     const bool use_dropout, const std::optional<double> dropout_rate,
     const dnn::FMHAMaskKind mask_type, const int sliding_window_length,
-    const int max_seg_per_batch, AttentionScoreModifier_t score_modifier) {
+    const int max_seg_per_batch, AttentionScoreModifier_t score_modifier,
+    const int reserved_score_modifier_inputs) {
   using cudnn_frontend::graph::Tensor_attributes;
 
 #if CUDNN_VERSION >= 90000
@@ -5143,6 +5144,10 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
 
   if (score_modifier != nullptr) {
     sdpa_options.set_score_mod(score_modifier);
+    // skip uids reserved by score_modifier
+    for (int i = 0; i < reserved_score_modifier_inputs; i ++) {
+      next_uid();
+    }
   }
   // Add SDPA to the graph.
   auto [o_tensor, stats_tensor] =
