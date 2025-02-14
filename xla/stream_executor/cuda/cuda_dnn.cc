@@ -4986,7 +4986,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     const bool use_dropout, const std::optional<double> dropout_rate,
     const dnn::FMHAMaskKind mask_type, const int sliding_window_length,
     const int max_seg_per_batch, AttentionScoreModifier_t score_modifier,
-    const int reserved_score_modifier_inputs) {
+    const std::vector<dnn::TensorDescriptor>& modifier_inputs) {
   using cudnn_frontend::graph::Tensor_attributes;
 
 #if CUDNN_VERSION >= 90000
@@ -5143,11 +5143,19 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
   }
 
   if (score_modifier != nullptr) {
-    sdpa_options.set_score_mod(score_modifier);
-    // skip uids reserved by score_modifier
-    for (int i = 0; i < reserved_score_modifier_inputs; i ++) {
-      next_uid();
+    std::vector<std::shared_ptr<Tensor_attributes>> extra_inputs;
+    int index = 1;
+    for (auto &desc: modifier_inputs) {
+      extra_inputs.push_back(
+        graph.tensor(Tensor_attributes()
+              .set_dim(desc.dimensions())
+              .set_stride(desc.GetLogicalStrides())
+              .set_data_type(ToCudnnFrontendDataType(desc.type()))
+              .set_name(absl::StrCat("score_mod_input_", std::to_string(index)))
+              .set_uid(next_uid())));
+        index ++;
     }
+    sdpa_options.set_score_mod(std::bind(score_modifier, std::placeholders::_1, std::placeholders::_2, extra_inputs));
   }
   // Add SDPA to the graph.
   auto [o_tensor, stats_tensor] =
@@ -5624,7 +5632,8 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
     std::optional<double> dropout_rate, std::optional<int64_t> seed,
     double scale, bool use_dropout, bool use_bias, dnn::FMHAMaskKind mask_type,
     bool force_deterministic, const int sliding_window_length,
-    const int max_seg_per_batch, AttentionScoreModifier_t score_modifier) {
+    const int max_seg_per_batch, AttentionScoreModifier_t score_modifier,
+    const std::vector<dnn::TensorDescriptor>& modifier_inputs) {
 #if CUDNN_VERSION >= 90000
   VLOG(4) << "\n bmm1_grad_gemm1_rhs(q): " << q_desc.ToString()
           << "\n bmm1_grad_gemm2_rhs(k): " << k_desc.ToString()

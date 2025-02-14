@@ -209,10 +209,10 @@ inline std::optional<fe::DataType_t> GetComputeDataType(
   return compute_dtype;
 }
 
-std::shared_ptr<fe::graph::Tensor_attributes> BuilScoreModFunc(
-  std::shared_ptr<fe::graph::Graph> graph,
-  std::shared_ptr<fe::graph::Tensor_attributes> attention_score,
-  const HloComputation* computation, int reserved_uid) {
+static se::gpu::Tensor_t ScoreModFunc(
+  se::gpu::Graph_t graph, se::gpu::Tensor_t attention_score,
+  std::vector<se::gpu::Tensor_t> extra_inputs,
+  const HloComputation* computation) {
   std::vector<HloInstruction*> instructions =
     computation->MakeInstructionPostOrder();
   absl::flat_hash_map<const HloInstruction*,
@@ -222,30 +222,19 @@ std::shared_ptr<fe::graph::Tensor_attributes> BuilScoreModFunc(
     auto operand = [&hlo_to_cudnn, &hlo](int i) {
       return hlo_to_cudnn[hlo->operand(i)];
     };
-    // get data type
-    const std::optional<fe::DataType_t> data_type =
-        ToCudnnDataType(hlo->shape().element_type());
-    if (!data_type.has_value()) {
-      LOG(FATAL) << "Unimplemented data type: " << hlo->shape().element_type();
-    }
+    // check if operand i is user input to the flex graph
+    // all parameters except param 0 should return true
+    // param 0 is managed by cuDNN
+    auto is_input = [&hlo](int i) {
+      return HloPredicateIsOp<HloOpcode::kParameter>(hlo->operand(i)) &&
+              hlo->operand(i)->parameter_number() != 0;
+    };
     if (HloPredicateIsOp<HloOpcode::kParameter>(hlo)) {
       if (hlo->parameter_number() == 0) {
         // parameter 0 is atten score which is handled by cudnn
         hlo_to_cudnn[hlo] = attention_score;
       } else {
-        // parameters managed by user
-        auto shape = hlo->shape();
-        DataType type;
-        auto desc = TensorDescriptor::For(type, hlo->shape().dimensions(),
-                                        hlo->shape().layout().minor_to_major());
-        auto offset = hlo->parameter_number() - 1;
-        hlo_to_cudnn[hlo] = graph->tensor(
-          graph::Tensor_attributes()
-              .set_dim(desc.dimensions())
-              .set_stride(desc.GetLogicalStrides())
-              .set_data_type(*data_type)
-              .set_name(std::string(hlo->name()))
-              .set_uid(se::gpu::CuDnnTensorUID(reserved_uid + offset)));
+        hlo_to_cudnn[hlo] = extra_inputs[hlo->parameter_number()-1];
       }
     } else if (hlo->IsElementwise()) {
       const auto compute_dtype =
@@ -263,19 +252,26 @@ std::shared_ptr<fe::graph::Tensor_attributes> BuilScoreModFunc(
       if (hlo->operand_count() == 1) {
         hlo_to_cudnn[hlo] = graph->pointwise(operand(0), attrs);
       } else if (hlo->operand_count() == 2) {
-        hlo_to_cudnn[hlo] = graph->pointwise(operand(0), operand(1), attrs);
+        if (is_input(0) && is_input(1)) {
+          LOG(FATAL) << "cuDNN doesn't support both operands to pointwise op to "
+                     << "be user inputs for now.";
+        }
+        // make sure first operand is not an user input
+        // remove this once cuDNN supports this
+        if (is_input(0)) {
+          hlo_to_cudnn[hlo] = graph->pointwise(operand(1), operand(0), attrs);
+        } else {
+          hlo_to_cudnn[hlo] = graph->pointwise(operand(0), operand(1), attrs);
+        }
       } else {
         LOG(FATAL) << "Unimplemented elementwise operation.";
       }
     }
   }
-}
 
-static std::shared_ptr<fe::graph::Tensor_attributes> score_mod_func(
-  std::shared_ptr<fe::graph::Graph> graph,
-  std::shared_ptr<fe::graph::Tensor_attributes> attention_score,
-  const HloComputation* computation, int uid) {
-  return BuilScoreModFunc(graph, attention_score, computation, uid);
+  // return last output
+  CHECK(hlo_to_cudnn.contains(computation->root_instruction()));
+  return hlo_to_cudnn[computation->root_instruction()];
 }
 
 absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToForwardFMHA(
@@ -347,13 +343,17 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToForwardFMHA(
 
   auto computations = custom_call->called_computations();
   se::gpu::AttentionScoreModifier_t score_modifier = nullptr;
-  int reserved_score_modifier_inputs = 0;
+  std::vector<se::dnn::TensorDescriptor> modifier_inputs;
   if (computations.size() == 1) {
-    score_modifier = std::bind(score_mod_func, std::placeholders::_1, std::placeholders::_2, computations[0], input_index);
-    reserved_score_modifier_inputs = computations[0]->num_parameters() - 1;
-    input_index += reserved_score_modifier_inputs;
+    for (int i = 1; i < computations[0]->num_parameters(); i++) {
+        auto parameter = computations[0]->parameter_instruction(i);
+        TF_ASSIGN_OR_RETURN(auto desc, TensorDescriptorFor(parameter->shape()));
+        modifier_inputs.push_back(desc);
+    }
+    std::cerr << "modifier_inputs: " << modifier_inputs.size() << "\n";
+    score_modifier = std::bind(ScoreModFunc, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, computations[0]);
+    input_index += computations[0]->num_parameters() - 1;
   }
-
   TF_RET_CHECK(input_index == custom_call->operand_count());
   TF_ASSIGN_OR_RETURN(
       se::gpu::CudnnGraph graph,
@@ -361,7 +361,7 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToForwardFMHA(
           dnn_support, lhs_bmm1, rhs_bmm1, rhs_bmm2, output, bias, activation,
           static_cast<float>(config.fmha_scale()), dropout_rate > 0.0,
           dropout_rate, dnn_mask_type, sliding_window_length,
-          max_seg_per_batch, score_modifier, reserved_score_modifier_inputs));
+          max_seg_per_batch, score_modifier, modifier_inputs));
   return graph;
 }
 
@@ -515,6 +515,7 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToBackwardFMHA(
 
   const int sliding_window_length = config.sliding_window_length();
   se::gpu::AttentionScoreModifier_t score_modifier = nullptr;
+  std::vector<se::dnn::TensorDescriptor> modifier_inputs;
   TF_ASSIGN_OR_RETURN(
       se::gpu::CudnnGraph graph,
       se::gpu::GetCudnnFlashAttentionBackwardOperationGraph(
@@ -523,7 +524,7 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToBackwardFMHA(
           d_bmm1_rhs, d_bmm2_rhs, bias, dropout_rate, config.seed(),
           config.fmha_scale(), dropout_rate > 0.0, bias != std::nullopt,
           dnn_mask_type, force_deterministic, sliding_window_length,
-          max_seg_per_batch, score_modifier));
+          max_seg_per_batch, score_modifier, modifier_inputs));
   return graph;
 }
 
