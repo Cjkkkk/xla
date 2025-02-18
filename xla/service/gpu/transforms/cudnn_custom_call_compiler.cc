@@ -350,7 +350,6 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToForwardFMHA(
         TF_ASSIGN_OR_RETURN(auto desc, TensorDescriptorFor(parameter->shape()));
         modifier_inputs.push_back(desc);
     }
-    std::cerr << "modifier_inputs: " << modifier_inputs.size() << "\n";
     score_modifier = std::bind(ScoreModFunc, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, computations[0]);
     input_index += computations[0]->num_parameters() - 1;
   }
