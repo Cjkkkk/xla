@@ -737,7 +737,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
     double scale, bool use_dropout, bool use_bias,
     const dnn::FMHAMaskKind mask_type, bool force_deterministic,
     const int sliding_window_length, const int max_seg_per_batch,
-    AttentionScoreModifier_t score_modifier,
+    AttentionScoreModifier_t score_mod, AttentionScoreModifier_t score_mod_bwd,
     const std::vector<dnn::TensorDescriptor>& modifier_inputs);
 
 absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardF8OperationGraph(

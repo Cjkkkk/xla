@@ -342,7 +342,7 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToForwardFMHA(
   }
 
   auto computations = custom_call->called_computations();
-  se::gpu::AttentionScoreModifier_t score_modifier = nullptr;
+  se::gpu::AttentionScoreModifier_t score_mod = nullptr;
   std::vector<se::dnn::TensorDescriptor> modifier_inputs;
   if (computations.size() == 1) {
     for (int i = 1; i < computations[0]->num_parameters(); i++) {
@@ -350,7 +350,7 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToForwardFMHA(
         TF_ASSIGN_OR_RETURN(auto desc, TensorDescriptorFor(parameter->shape()));
         modifier_inputs.push_back(desc);
     }
-    score_modifier = std::bind(ScoreModFunc, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, computations[0]);
+    score_mod = std::bind(ScoreModFunc, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, computations[0]);
     input_index += computations[0]->num_parameters() - 1;
   }
   TF_RET_CHECK(input_index == custom_call->operand_count());
@@ -360,7 +360,7 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToForwardFMHA(
           dnn_support, lhs_bmm1, rhs_bmm1, rhs_bmm2, output, bias, activation,
           static_cast<float>(config.fmha_scale()), dropout_rate > 0.0,
           dropout_rate, dnn_mask_type, sliding_window_length,
-          max_seg_per_batch, score_modifier, modifier_inputs));
+          max_seg_per_batch, score_mod, modifier_inputs));
   return graph;
 }
 
@@ -513,8 +513,21 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToBackwardFMHA(
                       GetDNNFmhaMaskKindFromCudnnFmhaMaskKind(cudnn_mask_type));
 
   const int sliding_window_length = config.sliding_window_length();
-  se::gpu::AttentionScoreModifier_t score_modifier = nullptr;
+  auto computations = custom_call->called_computations();
+  se::gpu::AttentionScoreModifier_t score_mod = nullptr;
+  se::gpu::AttentionScoreModifier_t score_mod_bwd = nullptr;
   std::vector<se::dnn::TensorDescriptor> modifier_inputs;
+  if (computations.size() == 2) {
+    for (int i = 1; i < computations[0]->num_parameters(); i++) {
+        auto parameter = computations[0]->parameter_instruction(i);
+        TF_ASSIGN_OR_RETURN(auto desc, TensorDescriptorFor(parameter->shape()));
+        modifier_inputs.push_back(desc);
+    }
+    score_mod = std::bind(ScoreModFunc, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, computations[0]);
+    score_mod_bwd = std::bind(ScoreModFunc, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, computations[1]);
+    input_index += computations[0]->num_parameters() - 1;
+  }
+
   TF_ASSIGN_OR_RETURN(
       se::gpu::CudnnGraph graph,
       se::gpu::GetCudnnFlashAttentionBackwardOperationGraph(
@@ -523,7 +536,7 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToBackwardFMHA(
           d_bmm1_rhs, d_bmm2_rhs, bias, dropout_rate, config.seed(),
           config.fmha_scale(), dropout_rate > 0.0, bias != std::nullopt,
           dnn_mask_type, force_deterministic, sliding_window_length,
-          max_seg_per_batch, score_modifier, modifier_inputs));
+          max_seg_per_batch, score_mod, score_mod_bwd, modifier_inputs));
   return graph;
 }
 

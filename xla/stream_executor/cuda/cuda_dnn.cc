@@ -4985,7 +4985,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     const std::optional<dnn::TensorDescriptor> stats_descriptor, double scale,
     const bool use_dropout, const std::optional<double> dropout_rate,
     const dnn::FMHAMaskKind mask_type, const int sliding_window_length,
-    const int max_seg_per_batch, AttentionScoreModifier_t score_modifier,
+    const int max_seg_per_batch, AttentionScoreModifier_t score_mod,
     const std::vector<dnn::TensorDescriptor>& modifier_inputs) {
   using cudnn_frontend::graph::Tensor_attributes;
 
@@ -5142,7 +5142,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     sdpa_options.set_sliding_window_length(sliding_window_length);
   }
 
-  if (score_modifier != nullptr) {
+  if (score_mod != nullptr) {
     std::vector<std::shared_ptr<Tensor_attributes>> extra_inputs;
     int index = 1;
     for (auto &desc: modifier_inputs) {
@@ -5155,7 +5155,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
               .set_uid(next_uid())));
         index ++;
     }
-    sdpa_options.set_score_mod(std::bind(score_modifier, std::placeholders::_1, std::placeholders::_2, extra_inputs));
+    sdpa_options.set_score_mod(std::bind(score_mod, std::placeholders::_1, std::placeholders::_2, extra_inputs));
   }
   // Add SDPA to the graph.
   auto [o_tensor, stats_tensor] =
@@ -5632,7 +5632,8 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
     std::optional<double> dropout_rate, std::optional<int64_t> seed,
     double scale, bool use_dropout, bool use_bias, dnn::FMHAMaskKind mask_type,
     bool force_deterministic, const int sliding_window_length,
-    const int max_seg_per_batch, AttentionScoreModifier_t score_modifier,
+    const int max_seg_per_batch, AttentionScoreModifier_t score_mod,
+    AttentionScoreModifier_t score_mod_bwd,
     const std::vector<dnn::TensorDescriptor>& modifier_inputs) {
 #if CUDNN_VERSION >= 90000
   VLOG(4) << "\n bmm1_grad_gemm1_rhs(q): " << q_desc.ToString()
@@ -5851,6 +5852,23 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
 
   if (sliding_window_length > 0) {
     sdpa_backward_options.set_sliding_window_length(sliding_window_length);
+  }
+
+  if (score_mod != nullptr) {
+    std::vector<std::shared_ptr<Tensor_attributes>> extra_inputs;
+    int index = 1;
+    for (auto &desc: modifier_inputs) {
+      extra_inputs.push_back(
+        graph.tensor(Tensor_attributes()
+              .set_dim(desc.dimensions())
+              .set_stride(desc.GetLogicalStrides())
+              .set_data_type(ToCudnnFrontendDataType(desc.type()))
+              .set_name(absl::StrCat("score_mod_input_", std::to_string(index)))
+              .set_uid(next_uid())));
+        index ++;
+    }
+    sdpa_options.set_score_mod(std::bind(score_mod, std::placeholders::_1, std::placeholders::_2, extra_inputs));
+    sdpa_options.set_score_mod_bprop(std::bind(score_mod_bwd, std::placeholders::_1, std::placeholders::_2, extra_inputs));
   }
 
   auto [dQ, dK, dV] =
