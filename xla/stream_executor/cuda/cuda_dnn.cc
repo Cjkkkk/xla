@@ -4588,10 +4588,12 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     const dnn::MatmulTensorDescriptor& v_descriptor,
     const dnn::TensorDescriptor& o_descriptor,
     const std::optional<dnn::TensorDescriptor> bias_descriptor,
-    const std::optional<dnn::TensorDescriptor> stats_descriptor, double scale,
-    const bool use_dropout, const std::optional<double> dropout_rate,
-    const dnn::FMHAMaskKind mask_type, const int sliding_window_length,
-    const int max_seg_per_batch) {
+    const std::optional<dnn::TensorDescriptor> stats_descriptor,
+    const std::optional<dnn::TensorDescriptor> page_table_k_descriptor,
+    const std::optional<dnn::TensorDescriptor> page_table_v_descriptor,
+    double scale, const bool use_dropout,
+    const std::optional<double> dropout_rate, const dnn::FMHAMaskKind mask_type,
+    const int sliding_window_length, const int max_seg_per_batch) {
   using cudnn_frontend::graph::Tensor_attributes;
 
 #if CUDNN_VERSION >= 90000
@@ -4675,7 +4677,9 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
   // Setting actual seqlen
   bool is_padding = mask_type == dnn::FMHAMaskKind::PADDING ||
                     mask_type == dnn::FMHAMaskKind::PADDING_CAUSAL;
-  if (is_padding || max_seg_per_batch > 1) {
+  bool is_paged_attention = page_table_k_descriptor.has_value() &&
+                            page_table_v_descriptor.has_value();
+  if (is_padding || max_seg_per_batch > 1 || is_paged_attention) {
     // Get batch size
     auto b = q_dims[0];
     auto seq_q_tensor =
@@ -4720,6 +4724,26 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     v_tensor->set_ragged_offset(offset_kv);
   }
 
+  if (is_paged_attention) {
+    auto page_table_k = graph.tensor(
+        Tensor_attributes()
+            .set_name("page_table_k")
+            .set_dim(page_table_k_descriptor->dimensions())
+            .set_stride(page_table_k_descriptor->GetLogicalStrides())
+            .set_uid(next_uid())
+            .set_data_type(cudnn_frontend::DataType_t::INT32));
+
+    auto page_table_v = graph.tensor(
+        Tensor_attributes()
+            .set_name("page_table_v")
+            .set_dim(page_table_v_descriptor->dimensions())
+            .set_stride(page_table_v_descriptor->GetLogicalStrides())
+            .set_uid(next_uid())
+            .set_data_type(cudnn_frontend::DataType_t::INT32));
+    sdpa_options.set_paged_attention_k_table(page_table_k);
+    sdpa_options.set_paged_attention_v_table(page_table_v);
+    sdpa_options.set_paged_attention_max_seq_len_kv(k_dims[2]);
+  }
   // Setting seed and offset
   std::shared_ptr<Tensor_attributes> seed_tensor;
   std::shared_ptr<Tensor_attributes> offset_tensor;
