@@ -4624,10 +4624,24 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
 
   auto next_uid = [uid = 0]() mutable -> int { return CuDnnTensorUID(uid++); };
 
+  bool is_paged_attention = page_table_k_descriptor.has_value() &&
+                            page_table_v_descriptor.has_value();
+
   std::vector<int64_t> q_dims = q_descriptor.GetCudnnCompatibleDimensions(true);
-  std::vector<int64_t> k_dims = k_descriptor.GetCudnnCompatibleDimensions(true);
-  std::vector<int64_t> v_dims =
-      v_descriptor.GetCudnnCompatibleDimensions(false);
+  std::vector<int64_t> q_strides = q_descriptor.GetCudnnCompatibleStrides(true);
+  std::vector<int64_t> k_dims, v_dims, k_strides, v_strides;
+
+  if (is_paged_attention) {
+    k_dims = k_descriptor.tensor().dimensions();
+    v_dims = v_descriptor.tensor().dimensions();
+    k_strides = k_descriptor.tensor().GetLogicalStrides();
+    v_strides = v_descriptor.tensor().GetLogicalStrides();
+  } else {
+    k_dims = k_descriptor.GetCudnnCompatibleDimensions(true);
+    v_dims = v_descriptor.GetCudnnCompatibleDimensions(false);
+    k_strides = k_descriptor.GetCudnnCompatibleStrides(true);
+    v_strides = v_descriptor.GetCudnnCompatibleStrides(false);
+  }
 
   if (max_seg_per_batch > 1) {
     FixDimsForRaggedOffset(q_dims, max_seg_per_batch);
@@ -4639,20 +4653,20 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
       graph.tensor(Tensor_attributes()
                        .set_name("Q")
                        .set_dim(q_dims)
-                       .set_stride(q_descriptor.GetCudnnCompatibleStrides(true))
+                       .set_stride(q_strides)
                        .set_uid(next_uid()));
 
   std::shared_ptr<Tensor_attributes> k_tensor =
       graph.tensor(Tensor_attributes()
                        .set_name("K")
                        .set_dim(k_dims)
-                       .set_stride(k_descriptor.GetCudnnCompatibleStrides(true))
+                       .set_stride(k_strides)
                        .set_uid(next_uid()));
   std::shared_ptr<Tensor_attributes> v_tensor = graph.tensor(
       Tensor_attributes()
           .set_name("V")
           .set_dim(v_dims)
-          .set_stride(v_descriptor.GetCudnnCompatibleStrides(false))
+          .set_stride(v_strides)
           .set_uid(next_uid()));
 
   // Setting sdpa, and is_inference
@@ -4677,8 +4691,7 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
   // Setting actual seqlen
   bool is_padding = mask_type == dnn::FMHAMaskKind::PADDING ||
                     mask_type == dnn::FMHAMaskKind::PADDING_CAUSAL;
-  bool is_paged_attention = page_table_k_descriptor.has_value() &&
-                            page_table_v_descriptor.has_value();
+
   if (is_padding || max_seg_per_batch > 1 || is_paged_attention) {
     // Get batch size
     auto b = q_dims[0];
