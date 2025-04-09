@@ -4755,7 +4755,9 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
             .set_data_type(cudnn_frontend::DataType_t::INT32));
     sdpa_options.set_paged_attention_k_table(page_table_k);
     sdpa_options.set_paged_attention_v_table(page_table_v);
-    sdpa_options.set_paged_attention_max_seq_len_kv(k_dims[2]);
+    auto num_blocks_per_batch = page_table_v_descriptor->dimensions()[2];
+    auto block_size = k_dims[2];
+    sdpa_options.set_paged_attention_max_seq_len_kv(num_blocks_per_batch * block_size);
   }
   // Setting seed and offset
   std::shared_ptr<Tensor_attributes> seed_tensor;

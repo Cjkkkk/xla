@@ -154,7 +154,8 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToForwardFMHA(
 
   if (config.mask_type() == xla::gpu::CudnnfMHABackendConfig::PADDING ||
       config.mask_type() == xla::gpu::CudnnfMHABackendConfig::PADDING_CAUSAL ||
-      max_seg_per_batch > 1) {
+      max_seg_per_batch > 1 ||
+      is_paged_attention ) {
     // skip q_seqlen and kv_seqlen
     input_index += 2;
   }
