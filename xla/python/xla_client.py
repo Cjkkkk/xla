@@ -437,3 +437,5 @@ def make_replica_groups(replica_groups):
         _make_replica_group_proto(group) for group in replica_groups
     ]
   return replica_groups_protos
+
+check_is_cudnn_fmha_supported = _xla.check_is_cudnn_fmha_supported
