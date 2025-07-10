@@ -586,7 +586,7 @@ class CuDnnCustomCallVisitor : public DfsHloRewriteVisitor {
 }  // namespace
 
 absl::Status IsCudnnFmhaSupported(int64_t batch, int64_t num_q_heads,
-                                  int64_t num_kv_groups, int64_t seqlen_q,
+                                  int64_t num_kv_head, int64_t seqlen_q,
                                   int64_t seqlen_kv, int64_t qk_head_dim,
                                   int64_t v_head_dim,
                                   const std::string &backend_config_str,
