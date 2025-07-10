@@ -274,26 +274,8 @@ message CudnnfMHABackendConfig {
   // Dropout factor in MHA
   double dropout_rate = 13;
 
-  // Configs for mha bmms in the forward graph
-  xla.DotDimensionNumbers bmm1_dot_dimension_numbers = 11;
-  xla.DotDimensionNumbers bmm2_dot_dimension_numbers = 12;
-
-  xla.ShapeProto intermediate_tensor_shape = 14;
-
-  // Configs for mha bmms in the backward graph
-  xla.DotDimensionNumbers bmm1_grad_gemm1_dot_dimension_numbers = 16;
-  xla.DotDimensionNumbers bmm1_grad_gemm2_dot_dimension_numbers = 17;
-  xla.DotDimensionNumbers bmm2_grad_gemm1_dot_dimension_numbers = 18;
-  xla.DotDimensionNumbers bmm2_grad_gemm2_dot_dimension_numbers = 19;
-
   // Random seed used by dropout
   int64 seed = 15;
-
-  // Is flash attention
-  bool is_flash_attention = 20;
-
-  // Is causal mask
-  bool is_causal_mask = 21;
 
   // mask type
   enum MaskType {
@@ -319,6 +301,13 @@ message CudnnfMHABackendConfig {
 
   // Is Paged Attention
   bool is_paged_attention = 26;
+
+  // QKV layout
+  enum QKVLayout {
+    BSHD = 0;
+    BHSD = 1;
+  }
+  QKVLayout layout = 27;
 }
 
 // Backend config for a general custom call instruction, e.g. XLA FFI.
