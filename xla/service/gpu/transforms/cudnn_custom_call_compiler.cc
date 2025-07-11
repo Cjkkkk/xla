@@ -78,7 +78,6 @@ inline absl::StatusOr<CudnnfMHAMaskKind> AsCudnnFmhaMaskKind(
 }
 
 using se::dnn::DataType;
-using se::dnn::MatmulTensorDescriptor;
 using se::dnn::TensorDescriptor;
 
 absl::StatusOr<TensorDescriptor> TensorDescriptorFor(const Shape &shape) {
@@ -88,19 +87,6 @@ absl::StatusOr<TensorDescriptor> TensorDescriptorFor(const Shape &shape) {
                                shape.layout().minor_to_major());
 }
 
-enum Side { LHS, RHS };
-
-absl::StatusOr<MatmulTensorDescriptor> MatmulTensorDescriptorFor(
-    const Shape &shape, const DotDimensionNumbers &dnums, const Side side) {
-  TF_ASSIGN_OR_RETURN(const DataType type,
-                      GetDNNDataTypeFromPrimitiveType(shape.element_type()));
-  return MatmulTensorDescriptor::For(
-      type, shape.dimensions(), shape.layout().minor_to_major(),
-      (side == LHS) ? dnums.lhs_batch_dimensions()
-                    : dnums.rhs_batch_dimensions(),
-      (side == LHS) ? dnums.lhs_contracting_dimensions()
-                    : dnums.rhs_contracting_dimensions());
-}
 
 absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToForwardFMHA(
     se::dnn::DnnSupport &dnn_support, HloCustomCallInstruction *custom_call) {
@@ -112,18 +98,12 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToForwardFMHA(
   const xla::gpu::CudnnfMHABackendConfig &config =
       gpu_config.cudnn_fmha_backend_config();
 
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor q,
-      MatmulTensorDescriptorFor(custom_call->operand(0)->shape(),
-                                config.bmm1_dot_dimension_numbers(), LHS));
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor k,
-      MatmulTensorDescriptorFor(custom_call->operand(1)->shape(),
-                                config.bmm1_dot_dimension_numbers(), RHS));
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor v,
-      MatmulTensorDescriptorFor(custom_call->operand(2)->shape(),
-                                config.bmm2_dot_dimension_numbers(), RHS));
+  TF_ASSIGN_OR_RETURN(TensorDescriptor q,
+                      TensorDescriptorFor(custom_call->operand(0)->shape()));
+  TF_ASSIGN_OR_RETURN(TensorDescriptor k,
+                      TensorDescriptorFor(custom_call->operand(1)->shape()));
+  TF_ASSIGN_OR_RETURN(TensorDescriptor v,
+                      TensorDescriptorFor(custom_call->operand(2)->shape()));
   TF_ASSIGN_OR_RETURN(
       TensorDescriptor output,
       TensorDescriptorFor(ShapeUtil::GetSubshape(custom_call->shape(), {0})));
@@ -215,18 +195,12 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToForwardFMHAF8(
                       AsCudnnFmhaMaskKind(config.mask_type()));
   TF_ASSIGN_OR_RETURN(se::dnn::FMHAMaskKind dnn_mask_type,
                       GetDNNFmhaMaskKindFromCudnnFmhaMaskKind(cudnn_mask_type));
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor q,
-      MatmulTensorDescriptorFor(custom_call->operand(0)->shape(),
-                                config.bmm1_dot_dimension_numbers(), LHS));
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor k,
-      MatmulTensorDescriptorFor(custom_call->operand(1)->shape(),
-                                config.bmm1_dot_dimension_numbers(), RHS));
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor v,
-      MatmulTensorDescriptorFor(custom_call->operand(2)->shape(),
-                                config.bmm2_dot_dimension_numbers(), RHS));
+  TF_ASSIGN_OR_RETURN(TensorDescriptorFor q,
+                      TensorDescriptorFor(custom_call->operand(0)->shape()));
+  TF_ASSIGN_OR_RETURN(TensorDescriptorFor k,
+                      TensorDescriptorFor(custom_call->operand(1)->shape()));
+  TF_ASSIGN_OR_RETURN(TensorDescriptorFor v,
+                      TensorDescriptorFor(custom_call->operand(2)->shape()));
   TF_ASSIGN_OR_RETURN(
       TensorDescriptor output,
       TensorDescriptorFor(ShapeUtil::GetSubshape(custom_call->shape(), {0})));
@@ -309,26 +283,11 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToBackwardFMHA(
   config.set_force_deterministic(force_deterministic);
   TF_RETURN_IF_ERROR(custom_call->set_backend_config(gpu_config));
 
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor q,
-      MatmulTensorDescriptorFor(
-          q_shape, config.bmm1_grad_gemm1_dot_dimension_numbers(), RHS));
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor k,
-      MatmulTensorDescriptorFor(
-          k_shape, config.bmm1_grad_gemm2_dot_dimension_numbers(), RHS));
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor p,
-      MatmulTensorDescriptorFor(
-          p_shape, config.bmm2_grad_gemm1_dot_dimension_numbers(), LHS));
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor v,
-      MatmulTensorDescriptorFor(
-          v_shape, config.bmm2_grad_gemm2_dot_dimension_numbers(), RHS));
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor d_o,
-      MatmulTensorDescriptorFor(
-          d_o_shape, config.bmm2_grad_gemm1_dot_dimension_numbers(), RHS));
+  TF_ASSIGN_OR_RETURN(TensorDescriptor q, TensorDescriptorFor(q_shape));
+  TF_ASSIGN_OR_RETURN(TensorDescriptor k, TensorDescriptorFor(k_shape));
+  TF_ASSIGN_OR_RETURN(TensorDescriptor p, TensorDescriptorFor(p_shape));
+  TF_ASSIGN_OR_RETURN(TensorDescriptor v, TensorDescriptorFor(v_shape));
+  TF_ASSIGN_OR_RETURN(TensorDescriptor d_o, TensorDescriptorFor(d_o_shape));
 
   TF_ASSIGN_OR_RETURN(TensorDescriptor dq, TensorDescriptorFor(dq_shape));
   TF_ASSIGN_OR_RETURN(TensorDescriptor dk, TensorDescriptorFor(dk_shape));
@@ -405,26 +364,11 @@ absl::StatusOr<se::gpu::CudnnGraph> BuildGraphForCustomCallToBackwardFMHAF8(
   Shape dk_shape = ShapeUtil::GetSubshape(custom_call->shape(), {1});
   Shape dv_shape = ShapeUtil::GetSubshape(custom_call->shape(), {2});
 
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor q,
-      MatmulTensorDescriptorFor(
-          q_shape, config.bmm1_grad_gemm1_dot_dimension_numbers(), RHS));
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor k,
-      MatmulTensorDescriptorFor(
-          k_shape, config.bmm1_grad_gemm2_dot_dimension_numbers(), RHS));
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor p,
-      MatmulTensorDescriptorFor(
-          p_shape, config.bmm2_grad_gemm1_dot_dimension_numbers(), LHS));
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor v,
-      MatmulTensorDescriptorFor(
-          v_shape, config.bmm2_grad_gemm2_dot_dimension_numbers(), RHS));
-  TF_ASSIGN_OR_RETURN(
-      MatmulTensorDescriptor d_o,
-      MatmulTensorDescriptorFor(
-          d_o_shape, config.bmm2_grad_gemm1_dot_dimension_numbers(), RHS));
+  TF_ASSIGN_OR_RETURN(TensorDescriptor q, TensorDescriptorFor(q_shape));
+  TF_ASSIGN_OR_RETURN(TensorDescriptor k, TensorDescriptorFor());
+  TF_ASSIGN_OR_RETURN(TensorDescriptor p, TensorDescriptorFor());
+  TF_ASSIGN_OR_RETURN(TensorDescriptor v, TensorDescriptorFor());
+  TF_ASSIGN_OR_RETURN(TensorDescriptor d_o, TensorDescriptorFor(d_o_shape));
 
   TF_ASSIGN_OR_RETURN(TensorDescriptor dq, TensorDescriptorFor(dq_shape));
   TF_ASSIGN_OR_RETURN(TensorDescriptor dk, TensorDescriptorFor(dk_shape));

@@ -4018,15 +4018,32 @@ static absl::StatusOr<cudnn_frontend::ExecutionPlan> RebuildExecutionPlan(
 
 }  // namespace
 
-void FixDimsForRaggedOffset(std::vector<int64_t>& dims, int max_reg_per_batch) {
-  dims[0] *= max_reg_per_batch;
+std::vector<int64_t> GetCudnnCompatibleDimensions(
+    const dnn::TensorDescriptor& desc, QKVLayout layout) {
+  std::vector<int64_t> dims = desc.dimensions();
+  if (layout == QKVLayout::BHSD) {
+    int64_t t = dims[1];
+    dims[1] = dims[2];
+    dims[2] = t;
+  }
+  return dims;
+}
+
+std::vector<int64_t> GetCudnnCompatibleStrides(
+    const dnn::TensorDescriptor& desc, QKVLayout layout) {
+  std::vector<int64_t> strides = desc.GetLogicalStrides();
+  if (layout == QKVLayout::BHSD) {
+    int64_t t = strides[1];
+    strides[1] = strides[2];
+    strides[2] = t;
+  }
+  return strides;
 }
 
 absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
-    dnn::DnnSupport& dnn_support,
-    const dnn::MatmulTensorDescriptor& q_descriptor,
-    const dnn::MatmulTensorDescriptor& k_descriptor,
-    const dnn::MatmulTensorDescriptor& v_descriptor,
+    dnn::DnnSupport& dnn_support, const dnn::TensorDescriptor& q_descriptor,
+    const dnn::TensorDescriptor& k_descriptor,
+    const dnn::TensorDescriptor& v_descriptor,
     const dnn::TensorDescriptor& o_descriptor,
     const std::optional<dnn::TensorDescriptor> bias_descriptor,
     const std::optional<dnn::TensorDescriptor> stats_descriptor,
@@ -4039,15 +4056,15 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
   using cudnn_frontend::graph::Tensor_attributes;
 
 #if CUDNN_VERSION >= 90000
-  VLOG(4) << "\n bmm1_lhs(q): " << q_descriptor.ToString()
-          << "\n bmm1_rhs(k): " << k_descriptor.ToString()
-          << "\n bmm2_rhs(v): " << v_descriptor.ToString()
-          << "\n out(o): " << o_descriptor.ToString();
+  VLOG(4) << "\n q: " << q_descriptor.ToString()
+          << "\n k: " << k_descriptor.ToString()
+          << "\n v: " << v_descriptor.ToString()
+          << "\n out: " << o_descriptor.ToString();
   if (bias_descriptor) {
-    VLOG(4) << "\n bias(b): " << bias_descriptor->ToString();
+    VLOG(4) << "\n bias: " << bias_descriptor->ToString();
   }
   if (stats_descriptor) {
-    VLOG(4) << "\n activation(s): " << stats_descriptor->ToString();
+    VLOG(4) << "\n s: " << stats_descriptor->ToString();
   }
 
   cudnn_frontend::graph::Graph graph;
@@ -4069,10 +4086,12 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
   bool is_paged_attention = page_table_k_descriptor.has_value() &&
                             page_table_v_descriptor.has_value();
 
-  std::vector<int64_t> q_dims = q_descriptor.GetCudnnCompatibleDimensions(true);
-  std::vector<int64_t> k_dims = k_descriptor.GetCudnnCompatibleDimensions(true);
+  std::vector<int64_t> q_dims =
+      GetCudnnCompatibleDimensions(q_descriptor, layout);
+  std::vector<int64_t> k_dims =
+      GetCudnnCompatibleDimensions(k_descriptor, layout);
   std::vector<int64_t> v_dims =
-      v_descriptor.GetCudnnCompatibleDimensions(false);
+      GetCudnnCompatibleDimensions(v_descriptor, layout);
 
   if (max_seg_per_batch > 1) {
     FixDimsForRaggedOffset(q_dims, max_seg_per_batch);
@@ -4080,24 +4099,24 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     FixDimsForRaggedOffset(v_dims, max_seg_per_batch);
   }
 
-  std::shared_ptr<Tensor_attributes> q_tensor =
-      graph.tensor(Tensor_attributes()
-                       .set_name("Q")
-                       .set_dim(q_dims)
-                       .set_stride(q_descriptor.GetCudnnCompatibleStrides(true))
-                       .set_uid(next_uid()));
+  std::shared_ptr<Tensor_attributes> q_tensor = graph.tensor(
+      Tensor_attributes()
+          .set_name("Q")
+          .set_dim(q_dims)
+          .set_stride(GetCudnnCompatibleStrides(q_descriptor, layout))
+          .set_uid(next_uid()));
 
-  std::shared_ptr<Tensor_attributes> k_tensor =
-      graph.tensor(Tensor_attributes()
-                       .set_name("K")
-                       .set_dim(k_dims)
-                       .set_stride(k_descriptor.GetCudnnCompatibleStrides(true))
-                       .set_uid(next_uid()));
+  std::shared_ptr<Tensor_attributes> k_tensor = graph.tensor(
+      Tensor_attributes()
+          .set_name("K")
+          .set_dim(k_dims)
+          .set_stride(GetCudnnCompatibleStrides(k_descriptor, layout))
+          .set_uid(next_uid()));
   std::shared_ptr<Tensor_attributes> v_tensor = graph.tensor(
       Tensor_attributes()
           .set_name("V")
           .set_dim(v_dims)
-          .set_stride(v_descriptor.GetCudnnCompatibleStrides(false))
+          .set_stride(GetCudnnCompatibleStrides(v_descriptor, layout))
           .set_uid(next_uid()));
 
   // Setting sdpa, and is_inference
@@ -4289,10 +4308,9 @@ absl::Status CudnnSupport::DoPrepareForConvolution(
 }
 
 absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionF8OperationGraph(
-    dnn::DnnSupport& dnn_support,
-    const dnn::MatmulTensorDescriptor& q_descriptor,
-    const dnn::MatmulTensorDescriptor& k_descriptor,
-    const dnn::MatmulTensorDescriptor& v_descriptor,
+    dnn::DnnSupport& dnn_support, const dnn::TensorDescriptor& q_descriptor,
+    const dnn::TensorDescriptor& k_descriptor,
+    const dnn::TensorDescriptor& v_descriptor,
     const dnn::TensorDescriptor& o_descriptor,
     const std::optional<dnn::TensorDescriptor>& stats_descriptor, double scale,
     const dnn::FMHAMaskKind mask_type) {
@@ -4323,24 +4341,24 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionF8OperationGraph(
 
   auto next_uid = [uid = 0]() mutable -> int { return CuDnnTensorUID(uid++); };
 
-  std::shared_ptr<Tensor_attributes> q_tensor =
-      graph.tensor(Tensor_attributes()
-                       .set_name("Q")
-                       .set_dim(q_descriptor.GetCudnnCompatibleDimensions(true))
-                       .set_stride(q_descriptor.GetCudnnCompatibleStrides(true))
-                       .set_uid(next_uid()));
+  std::shared_ptr<Tensor_attributes> q_tensor = graph.tensor(
+      Tensor_attributes()
+          .set_name("Q")
+          .set_dim(GetCudnnCompatibleDimensions(q_descriptor, layout))
+          .set_stride(GetCudnnCompatibleStrides(q_descriptor, layout))
+          .set_uid(next_uid()));
 
-  std::shared_ptr<Tensor_attributes> k_tensor =
-      graph.tensor(Tensor_attributes()
-                       .set_name("K")
-                       .set_dim(k_descriptor.GetCudnnCompatibleDimensions(true))
-                       .set_stride(k_descriptor.GetCudnnCompatibleStrides(true))
-                       .set_uid(next_uid()));
+  std::shared_ptr<Tensor_attributes> k_tensor = graph.tensor(
+      Tensor_attributes()
+          .set_name("K")
+          .set_dim(GetCudnnCompatibleDimensions(k_descriptor, layout))
+          .set_stride(GetCudnnCompatibleStrides(k_descriptor, layout))
+          .set_uid(next_uid()));
   std::shared_ptr<Tensor_attributes> v_tensor = graph.tensor(
       Tensor_attributes()
           .set_name("V")
-          .set_dim(v_descriptor.GetCudnnCompatibleDimensions(false))
-          .set_stride(v_descriptor.GetCudnnCompatibleStrides(false))
+          .set_dim(GetCudnnCompatibleDimensions(v_descriptor, layout))
+          .set_stride(GetCudnnCompatibleStrides(v_descriptor, layout))
           .set_uid(next_uid()));
 
   auto descale_q =
@@ -4423,11 +4441,9 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionF8OperationGraph(
 }
 
 absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardF8OperationGraph(
-    dnn::DnnSupport& dnn_support, const dnn::MatmulTensorDescriptor& q_desc,
-    const dnn::MatmulTensorDescriptor& k_desc,
-    const dnn::MatmulTensorDescriptor& p_desc,
-    const dnn::MatmulTensorDescriptor& v_desc,
-    const dnn::MatmulTensorDescriptor& do_desc,
+    dnn::DnnSupport& dnn_support, const dnn::TensorDescriptor& q_desc,
+    const dnn::TensorDescriptor& k_desc, const dnn::TensorDescriptor& p_desc,
+    const dnn::TensorDescriptor& v_desc, const dnn::TensorDescriptor& do_desc,
     const dnn::TensorDescriptor& dq_desc, const dnn::TensorDescriptor& dk_desc,
     const dnn::TensorDescriptor& dv_desc, double scale,
     dnn::FMHAMaskKind mask_type) {
@@ -4460,41 +4476,41 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardF8OperationGraph(
   std::shared_ptr<Tensor_attributes> q =
       graph.tensor(Tensor_attributes()
                        .set_name("Q")
-                       .set_dim(q_desc.GetCudnnCompatibleDimensions(false))
-                       .set_stride(q_desc.GetCudnnCompatibleStrides(false))
+                       .set_dim(GetCudnnCompatibleDimensions(q_desc, layout))
+                       .set_stride(GetCudnnCompatibleStrides(q_desc, layout))
                        .set_uid(next_uid())
                        .set_data_type(ioDataType));
   std::shared_ptr<Tensor_attributes> k =
       graph.tensor(Tensor_attributes()
                        .set_name("K")
-                       .set_dim(k_desc.GetCudnnCompatibleDimensions(false))
-                       .set_stride(k_desc.GetCudnnCompatibleStrides(false))
+                       .set_dim(GetCudnnCompatibleDimensions(k_desc, layout))
+                       .set_stride(GetCudnnCompatibleStrides(k_desc, layout))
                        .set_uid(next_uid())
                        .set_data_type(ioDataType));
   std::shared_ptr<Tensor_attributes> v =
       graph.tensor(Tensor_attributes()
                        .set_name("V")
-                       .set_dim(v_desc.GetCudnnCompatibleDimensions(true))
-                       .set_stride(v_desc.GetCudnnCompatibleStrides(true))
+                       .set_dim(GetCudnnCompatibleDimensions(v_desc, layout))
+                       .set_stride(GetCudnnCompatibleStrides(v_desc, layout))
                        .set_uid(next_uid())
                        .set_data_type(ioDataType));
   std::shared_ptr<Tensor_attributes> o =
       graph.tensor(Tensor_attributes()
                        .set_name("O")
-                       .set_dim(do_desc.GetCudnnCompatibleDimensions(false))
-                       .set_stride(do_desc.GetCudnnCompatibleStrides(false))
+                       .set_dim(GetCudnnCompatibleDimensions(do_desc, layout))
+                       .set_stride(GetCudnnCompatibleStrides(do_desc, layout))
                        .set_uid(next_uid())
                        .set_data_type(ioDataType));
   std::shared_ptr<Tensor_attributes> dO =
       graph.tensor(Tensor_attributes()
                        .set_name("dO")
-                       .set_dim(do_desc.GetCudnnCompatibleDimensions(false))
-                       .set_stride(do_desc.GetCudnnCompatibleStrides(false))
+                       .set_dim(GetCudnnCompatibleDimensions(do_desc, layout))
+                       .set_stride(GetCudnnCompatibleStrides(do_desc, layout))
                        .set_uid(next_uid())
                        .set_data_type(ioDataType));
 
-  auto p_dims = p_desc.GetCudnnCompatibleDimensions(false);
-  auto p_strides = p_desc.GetCudnnCompatibleStrides(false);
+  auto p_dims = GetCudnnCompatibleDimensions(p_desc, layout);
+  auto p_strides = GetCudnnCompatibleStrides(p_desc, layout);
   std::vector<int64_t> p_reduction_dims(p_dims.begin(), p_dims.end() - 1);
   p_reduction_dims.push_back(1);
 
@@ -4702,11 +4718,9 @@ absl::StatusOr<CudnnGraph> GetCudnnBlockScaledDotOperationGraph(
 }
 
 absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
-    dnn::DnnSupport& dnn_support, const dnn::MatmulTensorDescriptor& q_desc,
-    const dnn::MatmulTensorDescriptor& k_desc,
-    const dnn::MatmulTensorDescriptor& p_desc,
-    const dnn::MatmulTensorDescriptor& v_desc,
-    const dnn::MatmulTensorDescriptor& do_desc,
+    dnn::DnnSupport& dnn_support, const dnn::TensorDescriptor& q_desc,
+    const dnn::TensorDescriptor& k_desc, const dnn::TensorDescriptor& p_desc,
+    const dnn::TensorDescriptor& v_desc, const dnn::TensorDescriptor& do_desc,
     const dnn::TensorDescriptor& dq_desc, const dnn::TensorDescriptor& dk_desc,
     const dnn::TensorDescriptor& dv_desc,
     const std::optional<dnn::TensorDescriptor> bias_descriptor,
@@ -4740,12 +4754,12 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
       .set_io_data_type(ioDataType);
 
   // Get dims and strides
-  std::vector<int64_t> q_dims = q_desc.GetCudnnCompatibleDimensions(false);
-  std::vector<int64_t> k_dims = k_desc.GetCudnnCompatibleDimensions(false);
-  std::vector<int64_t> v_dims = v_desc.GetCudnnCompatibleDimensions(true);
-  std::vector<int64_t> p_dims = p_desc.GetCudnnCompatibleDimensions(false);
-  std::vector<int64_t> p_strides = p_desc.GetCudnnCompatibleStrides(false);
-  std::vector<int64_t> do_dims = do_desc.GetCudnnCompatibleDimensions(false);
+  std::vector<int64_t> q_dims = GetCudnnCompatibleDimensions(q_desc, layout);
+  std::vector<int64_t> k_dims = GetCudnnCompatibleDimensions(k_desc, layout);
+  std::vector<int64_t> v_dims = GetCudnnCompatibleDimensions(v_desc, layout);
+  std::vector<int64_t> p_dims = GetCudnnCompatibleDimensions(p_desc, layout);
+  std::vector<int64_t> p_strides = GetCudnnCompatibleStrides(p_desc, layout);
+  std::vector<int64_t> do_dims = GetCudnnCompatibleDimensions(do_desc, layout);
   std::vector<int64_t> dq_dims = dq_desc.dimensions();
   std::vector<int64_t> dk_dims = dk_desc.dimensions();
   std::vector<int64_t> dv_dims = dv_desc.dimensions();

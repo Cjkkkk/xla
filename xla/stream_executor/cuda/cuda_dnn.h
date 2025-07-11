@@ -701,10 +701,9 @@ class CudnnSupport : public dnn::DnnSupport {
 };
 
 absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
-    dnn::DnnSupport& dnn_support,
-    const dnn::MatmulTensorDescriptor& q_descriptor,
-    const dnn::MatmulTensorDescriptor& k_descriptor,
-    const dnn::MatmulTensorDescriptor& v_descriptor,
+    dnn::DnnSupport& dnn_support, const dnn::TensorDescriptor& q_descriptor,
+    const dnn::TensorDescriptor& k_descriptor,
+    const dnn::TensorDescriptor& v_descriptor,
     const dnn::TensorDescriptor& o_descriptor,
     std::optional<dnn::TensorDescriptor> bias_descriptor,
     std::optional<dnn::TensorDescriptor> stats_descriptor,
@@ -715,20 +714,17 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionOperationGraph(
     int max_seg_per_batch, ScoreModFunc* score_mod);
 
 absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionF8OperationGraph(
-    dnn::DnnSupport& dnn_support,
-    const dnn::MatmulTensorDescriptor& q_descriptor,
-    const dnn::MatmulTensorDescriptor& k_descriptor,
-    const dnn::MatmulTensorDescriptor& v_descriptor,
+    dnn::DnnSupport& dnn_support, const dnn::TensorDescriptor& q_descriptor,
+    const dnn::TensorDescriptor& k_descriptor,
+    const dnn::TensorDescriptor& v_descriptor,
     const dnn::TensorDescriptor& o_descriptor,
     const std::optional<dnn::TensorDescriptor>& stats_descriptor, double scale,
     dnn::FMHAMaskKind mask_type);
 
 absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
-    dnn::DnnSupport& dnn_support, const dnn::MatmulTensorDescriptor& q_desc,
-    const dnn::MatmulTensorDescriptor& k_desc,
-    const dnn::MatmulTensorDescriptor& p_desc,
-    const dnn::MatmulTensorDescriptor& v_desc,
-    const dnn::MatmulTensorDescriptor& do_desc,
+    dnn::DnnSupport& dnn_support, const dnn::TensorDescriptor& q_desc,
+    const dnn::TensorDescriptor& k_desc, const dnn::TensorDescriptor& p_desc,
+    const dnn::TensorDescriptor& v_desc, const dnn::TensorDescriptor& do_desc,
     const dnn::TensorDescriptor& dq_desc, const dnn::TensorDescriptor& dk_desc,
     const dnn::TensorDescriptor& dv_desc,
     const std::optional<dnn::TensorDescriptor> bias_descriptor,
@@ -740,11 +736,9 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardOperationGraph(
     ScoreModFunc* score_mod);
 
 absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardF8OperationGraph(
-    dnn::DnnSupport& dnn_support, const dnn::MatmulTensorDescriptor& q_desc,
-    const dnn::MatmulTensorDescriptor& k_desc,
-    const dnn::MatmulTensorDescriptor& p_desc,
-    const dnn::MatmulTensorDescriptor& v_desc,
-    const dnn::MatmulTensorDescriptor& do_desc,
+    dnn::DnnSupport& dnn_support, const dnn::TensorDescriptor& q_desc,
+    const dnn::TensorDescriptor& k_desc, const dnn::TensorDescriptor& p_desc,
+    const dnn::TensorDescriptor& v_desc, const dnn::TensorDescriptor& do_desc,
     const dnn::TensorDescriptor& dq_desc, const dnn::TensorDescriptor& dk_desc,
     const dnn::TensorDescriptor& dv_desc, double scale,
     dnn::FMHAMaskKind mask_type);

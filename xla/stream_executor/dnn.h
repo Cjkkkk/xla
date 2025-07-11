@@ -173,44 +173,6 @@ class TensorDescriptor {
   std::vector<int64_t> minor_to_major_;
 };
 
-class MatmulTensorDescriptor {
- public:
-  MatmulTensorDescriptor() = default;
-  absl::StatusOr<std::vector<int64_t>> GetNonContractingDims() const;
-  std::vector<int64_t> GetCudnnCompatibleDimensions(
-      bool is_lhs
-      /*if not lhs, then rhs*/) const;
-  std::vector<int64_t> GetCudnnCompatibleStrides(
-      bool is_lhs
-      /*if not lhs, then rhs*/) const;
-  absl::StatusOr<std::vector<int64_t>> MakeCudnnCompatible(
-      const std::vector<int64_t>&, bool is_lhs) const;
-
-  static MatmulTensorDescriptor For(DataType type,
-                                    absl::Span<const int64_t> dimensions,
-                                    absl::Span<const int64_t> minor_to_major,
-                                    absl::Span<const int64_t> batch_dims,
-                                    absl::Span<const int64_t> contracting_dims);
-  DataType type() const { return tensor_.type(); }
-
-  std::string ToString() const;
-
-  TensorDescriptor tensor() const { return tensor_; }
-
- protected:
-  MatmulTensorDescriptor(TensorDescriptor tensor,
-                         std::vector<int64_t> batch_dims,
-                         std::vector<int64_t> contracting_dims)
-      : tensor_(tensor),
-        batch_dimension_numbers_(batch_dims),
-        contracting_dim_(contracting_dims) {}
-
- private:
-  TensorDescriptor tensor_;
-  std::vector<int64_t> batch_dimension_numbers_;
-  std::vector<int64_t> contracting_dim_;
-};
-
 // Specifies the descriptor for a RNN model.
 //
 // An example use case:
