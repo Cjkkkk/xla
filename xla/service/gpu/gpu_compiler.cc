@@ -3290,6 +3290,7 @@ absl::Status GpuCompiler::AddConvAndGemmAutotuningPass(
       return !backend_config.has_triton_gemm_config();
     }
     if (backend_config.kind() == kCuDnnFusionKind) {
+      return false;
       return !backend_config.has_cudnn_fusion_config();
     }
     if (backend_config.kind() == kCustomFusionKind) {
