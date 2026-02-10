@@ -238,6 +238,7 @@ class RaggedDotDimensionAdapter {
     } else if (operand_idx == 1) {
       // weight
       fixed_dims = {dims[0], dims[1], dims[2]};
+      //fixed_strides = {strides[0], strides[1], strides[2]};
       fixed_strides = {strides[0], 1, dims[1]};
     } else if (operand_idx == 2) {
       // group size
