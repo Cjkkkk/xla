@@ -128,10 +128,14 @@ bool IsSupportedCudnnFusion(const HloInstruction& instr,
   HloDotInstruction* dot =
       Cast<HloDotInstruction>(hlo_query::GetFirstInstructionWithOpcode(
           *instr.fused_instructions_computation(), HloOpcode::kDot));
-  if (dot == nullptr) {
-    VLOG(1) << "Fusion does not contain a dot.";
+  HloDotInstruction* ragged_dot =
+      Cast<HloDotInstruction>(hlo_query::GetFirstInstructionWithOpcode(
+          *instr.fused_instructions_computation(), HloOpcode::kRaggedDot));
+  if (dot == nullptr && ragged_dot == nullptr) {
+    VLOG(1) << "Fusion does not contain a dot or ragged_dot.";
     return false;
   }
+
   if (!algorithm_util::IsSupportedByCudnn(
           dot->precision_config().algorithm())) {
     VLOG(1) << "Fusion contains a precision config not supported by cudnn.";
@@ -239,6 +243,7 @@ GetCudnnFusionConfigs(const HloInstruction& instr,
   std::vector<std::unique_ptr<BackendConfig>> configs;
   int plan_count = CuDnnFusionCompiler::GetAvailablePlanCount(
       *stream_executor, *DynCast<HloFusionInstruction>(&instr));
+  std::cerr << "Found " << plan_count << " plans for cudnn fusion.";
   VLOG(2) << "Found " << plan_count << " plans for cudnn fusion.";
   configs.reserve(plan_count);
   for (int plan_id = 0; plan_id < plan_count; ++plan_id) {
