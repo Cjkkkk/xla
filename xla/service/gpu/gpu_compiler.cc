@@ -342,6 +342,7 @@ limitations under the License.
 #include "tsl/platform/stacktrace.h"
 #include "tsl/profiler/lib/scoped_annotation.h"
 #include "tsl/profiler/lib/traceme.h"
+#include "xla/backends/gpu/transforms/ragged_dot_fusion_rewriter.h"
 
 namespace xla {
 namespace gpu {
@@ -1951,6 +1952,11 @@ absl::Status GpuCompiler::OptimizeHloPostLayoutAssignment(
   // f32).
   add_float_normalization(pipeline);
 
+  if (!debug_options.xla_gpu_experimental_disable_binary_libraries() &&
+      debug_options.xla_gpu_experimental_use_ragged_dot_fusion()) {
+    pipeline.AddPass<RaggedDotFusionRewriter>();
+  }
+
   TF_RETURN_IF_ERROR(AddConvAndGemmAutotuningPass(
       &pipeline, hlo_module, gpu_version, options, thread_pool, stream_exec,
       &gpu_target_config, options.key_value_store,
@@ -2030,7 +2036,7 @@ absl::Status GpuCompiler::OptimizeHloPostLayoutAssignment(
       std::make_unique<DefaultVerifierMetadata>(std::move(opts)),
       "end-of-post-layout_assignment");
 #endif  // NDEBUG
-
+  pipeline.AddPass<RaggedDotRewriter>(gpu_version);
   RETURN_IF_ERROR(
       pipeline.Run(hlo_module, {HloInstruction::kMainExecutionThread})
           .status());
