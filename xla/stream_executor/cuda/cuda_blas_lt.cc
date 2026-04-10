@@ -261,6 +261,23 @@ auto BlasLt::MatmulPlan::GetAlgorithms(const Stream* stream,
         cu_preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
         max_workspace_size));
 
+#if CUDA_VERSION >= 11080
+    // Set dummy (non-null, aligned) scale pointers before querying heuristics
+    // so that cuBLASLt considers algorithms that support FP8 tensor scaling.
+    // Real pointers are set in DoMatmul() before cublasLtMatmul().
+    bool is_fp8_scaled =
+        (a_desc_.type() == CUDA_R_8F_E4M3 || a_desc_.type() == CUDA_R_8F_E5M2 ||
+         b_desc_.type() == CUDA_R_8F_E4M3 || b_desc_.type() == CUDA_R_8F_E5M2);
+    if (is_fp8_scaled) {
+      void* dummy = reinterpret_cast<void*>(0x40);
+      TF_RETURN_IF_ERROR(
+          SetAttr(op_desc_.get(), CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, dummy));
+      TF_RETURN_IF_ERROR(
+          SetAttr(op_desc_.get(), CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, dummy));
+      TF_RETURN_IF_ERROR(
+          SetAttr(op_desc_.get(), CUBLASLT_MATMUL_DESC_D_SCALE_POINTER, dummy));
+    }
+#endif
     std::unique_ptr<ActivateContext> activation = blas_lt->parent_->Activate();
 
     int found_algorithm_count = 0;
