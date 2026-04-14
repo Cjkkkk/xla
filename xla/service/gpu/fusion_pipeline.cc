@@ -19,7 +19,6 @@ limitations under the License.
 #include <utility>
 
 #include "mlir/IR/MLIRContext.h"
-#include "tsl/platform/threadpool.h"
 #include "xla/backends/gpu/transforms/conv_fusion_rewriter.h"
 #include "xla/backends/gpu/transforms/multi_output_fusion.h"
 #include "xla/backends/gpu/transforms/priority_fusion.h"
@@ -40,6 +39,7 @@ limitations under the License.
 #include "xla/stream_executor/device_description.h"
 #include "xla/tsl/platform/threadpool.h"
 #include "xla/xla.pb.h"
+#include "tsl/platform/threadpool.h"
 
 namespace xla {
 namespace gpu {
@@ -69,12 +69,6 @@ HloPassPipeline FusionPipeline(
     fusion.AddPass<ConvFusionRewriter>();
   }
 
-  // Rewrite ragged dots into ragged dot fusion.
-  if (!debug_options.xla_gpu_experimental_disable_binary_libraries() &&
-      debug_options.xla_gpu_experimental_use_ragged_dot_fusion()) {
-    // fusion.AddPass<RaggedDotFusionRewriter>();
-  }
-
   GpuHloCostAnalysis::Options cost_analysis_options{
       shape_size_bytes_function,
       /*per_second_rates=*/{},
@@ -83,6 +77,7 @@ HloPassPipeline FusionPipeline(
   fusion.AddPass<PriorityFusion>(thread_pool, gpu_device_info, alias_info,
                                  std::move(cost_analysis_options),
                                  mlir_context);
+
   // Running CSE affects how many users an op has. This plays a role in what
   // we detect as a tiled transpose fusion.
   fusion.AddPass<HloCSE>(

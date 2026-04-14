@@ -15,21 +15,20 @@ limitations under the License.
 
 #include "xla/backends/gpu/transforms/ragged_dot_fusion_rewriter.h"
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include <array>
 #include <initializer_list>
 #include <memory>
 #include <string>
 #include <utility>
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/log.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_replace.h"
 #include "absl/strings/string_view.h"
-#include "xla/backends/gpu/transforms/conv_kind_assignment.h"
+#include "xla/backends/gpu/tests/hlo_pjrt_gpu_test_base.h"
 #include "xla/error_spec.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_print_options.h"
@@ -39,7 +38,6 @@ limitations under the License.
 #include "xla/hlo/transforms/simplifiers/algebraic_simplifier.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/ir_emission_utils.h"
-#include "xla/service/gpu/tests/hlo_pjrt_gpu_test_base.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/service/pattern_matcher.h"
 #include "xla/stream_executor/cuda/cuda_compute_capability.h"
@@ -188,6 +186,10 @@ class RaggedDotFusionRewriterIntegrationTest
 };
 
 TEST_F(RaggedDotFusionRewriterIntegrationTest, TestRaggedDotOnly) {
+  if (GetDnnVersion() < se::dnn::VersionInfo{9, 21, 0}) {
+    GTEST_SKIP() << "CuDNN ragged dot requires cuDNN 9.21+.";
+  }
+
   TestMatchWithAllTypes(R"(
     HloModule Test
 

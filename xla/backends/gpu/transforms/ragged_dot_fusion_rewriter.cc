@@ -121,10 +121,10 @@ absl::StatusOr<std::unique_ptr<HloInstruction>> RaggedToCuDNNFusion(
       computation->AddInstruction(CreateCumulativeSum(group_sizes));
   HloInstruction* sub =
       computation->AddInstruction(HloInstruction::CreateBinary(
-          cumulative_sum->shape(), HloOpcode::kSubtract, cumulative_sum, group_sizes));
-  HloInstruction* fused_sub_cum_group_size =
-      builder.AddInstruction(HloInstruction::CreateParameter(
-          2, sub->shape(), sub->name()));
+          cumulative_sum->shape(), HloOpcode::kSubtract, cumulative_sum,
+          group_sizes));
+  HloInstruction* fused_sub_cum_group_size = builder.AddInstruction(
+      HloInstruction::CreateParameter(2, sub->shape(), sub->name()));
 
   HloInstruction* fused_ragged_dot =
       builder.AddInstruction(ragged_dot->CloneWithNewOperands(
@@ -134,9 +134,8 @@ absl::StatusOr<std::unique_ptr<HloInstruction>> RaggedToCuDNNFusion(
   HloComputation* new_computation =
       ragged_dot->GetModule()->AddComputationAndUnifyNamesAndIds(
           builder.Build(fused_ragged_dot), /*is_entry=*/false);
-  std::vector<HloInstruction*> fusion_params = {ragged_dot->mutable_operand(0),
-                                                ragged_dot->mutable_operand(1),
-                                                sub};
+  std::vector<HloInstruction*> fusion_params = {
+      ragged_dot->mutable_operand(0), ragged_dot->mutable_operand(1), sub};
   return HloInstruction::CreateFusion(ragged_dot->shape(),
                                       HloInstruction::FusionKind::kCustom,
                                       fusion_params, new_computation);

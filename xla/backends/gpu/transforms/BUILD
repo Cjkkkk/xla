@@ -2213,6 +2213,7 @@ xla_test(
     deps = [
         ":ragged_dot_fusion_rewriter",
         "//xla:error_spec",
+        "//xla/backends/gpu/tests:hlo_pjrt_gpu_test_base",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/testlib:filecheck",
         "//xla/hlo/testlib:pattern_matcher_gmock",
@@ -2222,7 +2223,6 @@ xla_test(
         "//xla/service:pattern_matcher",
         "//xla/service/gpu:backend_configs_cc",
         "//xla/service/gpu:ir_emission_utils",
-        "//xla/service/gpu/tests:hlo_pjrt_gpu_test_base",
         "//xla/stream_executor:dnn",
         "//xla/stream_executor:semantic_version",
         "//xla/stream_executor/cuda:cuda_compute_capability",

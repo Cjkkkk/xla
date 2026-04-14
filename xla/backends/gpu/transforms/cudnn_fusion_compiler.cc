@@ -199,7 +199,7 @@ struct Result {
 
 class RaggedDotDimensionAdapter {
   explicit RaggedDotDimensionAdapter(const HloInstruction& ragged_dot,
-                                RaggedDotDimensionNumbers dums)
+                                     RaggedDotDimensionNumbers dums)
       : ragged_dot_(ragged_dot), dums_(dums) {}
 
  public:
@@ -207,8 +207,10 @@ class RaggedDotDimensionAdapter {
 
   static absl::StatusOr<std::optional<RaggedDotDimensionAdapter>> Create(
       const HloFusionInstruction& fusion, const HloComputation& computation) {
-    const HloInstruction* maybe_ragged_dot = hlo_query::GetFirstInstructionWithOpcode(
-        computation, HloOpcode::kRaggedDot);
+    const HloInstruction* maybe_ragged_dot =
+        hlo_query::GetFirstInstructionWithOpcode(computation,
+                                                 HloOpcode::kRaggedDot);
+
     if (maybe_ragged_dot == nullptr) {
       VLOG(3) << "Not a ragged dot fusion.";
       return std::nullopt;
@@ -253,8 +255,6 @@ class RaggedDotDimensionAdapter {
               .value()[0];
       fixed_dims = {dims[0], dims[rhs_contracting_dim],
                     dims[rhs_non_contracting_dim]};
-      // fixed_strides = {strides[0], strides[1], strides[2]};
-      // fixed_strides = {strides[0], 1, dims[1]};
       fixed_strides = {strides[0], strides[rhs_contracting_dim],
                        strides[rhs_non_contracting_dim]};
     } else if (operand_idx == 2) {

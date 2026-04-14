@@ -119,6 +119,7 @@ limitations under the License.
 #include "xla/backends/gpu/transforms/ragged_all_to_all_canonicalizer.h"
 #include "xla/backends/gpu/transforms/ragged_all_to_all_decomposer.h"
 #include "xla/backends/gpu/transforms/ragged_all_to_all_multi_host_decomposer.h"
+#include "xla/backends/gpu/transforms/ragged_dot_fusion_rewriter.h"
 #include "xla/backends/gpu/transforms/reduce_scatter_creator.h"
 #include "xla/backends/gpu/transforms/reduction_degenerate_dim_remover.h"
 #include "xla/backends/gpu/transforms/reduction_dimension_grouper.h"
@@ -342,7 +343,6 @@ limitations under the License.
 #include "tsl/platform/stacktrace.h"
 #include "tsl/profiler/lib/scoped_annotation.h"
 #include "tsl/profiler/lib/traceme.h"
-#include "xla/backends/gpu/transforms/ragged_dot_fusion_rewriter.h"
 
 namespace xla {
 namespace gpu {
@@ -2036,7 +2036,7 @@ absl::Status GpuCompiler::OptimizeHloPostLayoutAssignment(
       std::make_unique<DefaultVerifierMetadata>(std::move(opts)),
       "end-of-post-layout_assignment");
 #endif  // NDEBUG
-  pipeline.AddPass<RaggedDotRewriter>(gpu_version);
+
   RETURN_IF_ERROR(
       pipeline.Run(hlo_module, {HloInstruction::kMainExecutionThread})
           .status());
