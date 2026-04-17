@@ -325,7 +325,8 @@ absl::Status NVPTXCompiler::OptimizeHloPostLayoutAssignment(
 }
 
 absl::Status NVPTXCompiler::RunCudnnCompilerPasses(
-    HloModule* module, se::dnn::DnnSupport& dnn_support,
+    HloModule* module, se::dnn::DnnSupport* dnn_support,
+    const se::DeviceDescription& gpu_device_info,
     BinaryMap* dnn_compiled_graphs) {
   if (module->config()
           .debug_options()
@@ -336,11 +337,13 @@ absl::Status NVPTXCompiler::RunCudnnCompilerPasses(
     return absl::StrFormat("XlaCompileCudnnFusion:#module=%s,program_id=%d#",
                            module->name(), module->unique_id());
   });
-  CuDnnFusionCompiler fusion_compiler(dnn_support, *dnn_compiled_graphs);
+  CuDnnFusionCompiler fusion_compiler(dnn_support, gpu_device_info,
+                                      *dnn_compiled_graphs);
   TF_RETURN_IF_ERROR(
       fusion_compiler.Run(module, {HloInstruction::kMainExecutionThread})
           .status());
-  CuDnnCustomCallCompiler call_compiler(dnn_support, *dnn_compiled_graphs);
+  CuDnnCustomCallCompiler call_compiler(dnn_support, gpu_device_info,
+                                        *dnn_compiled_graphs);
   return call_compiler.Run(module, {HloInstruction::kMainExecutionThread})
       .status();
 }

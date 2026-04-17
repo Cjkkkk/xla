@@ -72,9 +72,10 @@ class NVPTXCompiler : public GpuCompiler {
       const GpuAliasInfo* alias_info, tsl::thread::ThreadPool* thread_pool,
       CompilationStats* compilation_stats) override;
 
-  absl::Status RunCudnnCompilerPasses(HloModule* module,
-                                      se::dnn::DnnSupport& dnn_support,
-                                      BinaryMap* dnn_compiled_graphs) override;
+  absl::Status RunCudnnCompilerPasses(
+      HloModule* module, se::dnn::DnnSupport* dnn_support,
+      const se::DeviceDescription& gpu_device_info,
+      BinaryMap* dnn_compiled_graphs) override;
 
   std::unique_ptr<GpuAliasInfo> GetAliasInfo(
       const se::DeviceDescription& device_description) const override;
