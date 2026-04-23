@@ -123,7 +123,8 @@ TEST_F(RaggedDotFusionRewriterUnitTest, TestSupportedRaggedDot) {
 // It verifies that the rewriter works correctly within the full GPU
 // optimization pipeline and produces numerically correct results on hardware.
 class RaggedDotFusionRewriterIntegrationTest
-    : public HloPjRtInterpreterReferenceMixin<HloPjRtGpuTestBase> {
+    : public HloPjRtInterpreterReferenceMixin<HloPjRtGpuTestBase>,
+      public ::testing::WithParamInterface<absl::string_view> {
  public:
   bool IsCuda() const {
     return device_description().gpu_compute_capability().IsCuda();
@@ -167,30 +168,14 @@ class RaggedDotFusionRewriterIntegrationTest
     return module->ToString(print_opts);
   }
 
-  void TestMatchWithAllTypes(absl::string_view hlo_string) {
-    for (absl::string_view type : kbf16f16) {
-      const std::string hlo_with_new_type =
-          absl::StrReplaceAll(hlo_string, {{"TYPE", type}});
-      std::string optimized_hlo_string = GetOptimizedHlo(hlo_with_new_type);
-      EXPECT_THAT(optimized_hlo_string, HasSubstr(kCuDnnFusionKind));
-
-      TF_ASSERT_OK_AND_ASSIGN(auto module,
-                              ParseAndReturnVerifiedModule(hlo_with_new_type));
-      DebugOptions debug_opts = module->config().debug_options();
-      debug_opts.set_xla_gpu_experimental_use_ragged_dot_fusion(true);
-      module->mutable_config().set_debug_options(debug_opts);
-      EXPECT_TRUE(RunAndCompare(std::move(module), ErrorSpec{0.01, 0.01}))
-          << optimized_hlo_string;
-    }
-  }
 };
 
-TEST_F(RaggedDotFusionRewriterIntegrationTest, TestRaggedDotOnly) {
+TEST_P(RaggedDotFusionRewriterIntegrationTest, TestRaggedDotOnly) {
   if (GetDnnVersion() < se::dnn::VersionInfo{9, 21, 0}) {
     GTEST_SKIP() << "CuDNN ragged dot requires cuDNN 9.21+.";
   }
 
-  TestMatchWithAllTypes(R"(
+  const std::string hlo_with_new_type = absl::StrReplaceAll(R"(
     HloModule Test
 
     ENTRY Test {
@@ -199,8 +184,22 @@ TEST_F(RaggedDotFusionRewriterIntegrationTest, TestRaggedDotOnly) {
       group_sizes = s32[16]{0} parameter(2)
       ROOT rd = TYPE[128,256]{1,0} ragged-dot(input, weight, group_sizes),
              lhs_contracting_dims={1}, rhs_contracting_dims={1}, lhs_ragged_dims={0}, rhs_group_dims={0}
-    })");
+    })",
+                                                             {{"TYPE", GetParam()}});
+  std::string optimized_hlo_string = GetOptimizedHlo(hlo_with_new_type);
+  EXPECT_THAT(optimized_hlo_string, HasSubstr(kCuDnnFusionKind));
+
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnVerifiedModule(hlo_with_new_type));
+  DebugOptions debug_opts = module->config().debug_options();
+  debug_opts.set_xla_gpu_experimental_use_ragged_dot_fusion(true);
+  module->mutable_config().set_debug_options(debug_opts);
+  EXPECT_TRUE(RunAndCompare(std::move(module), ErrorSpec{0.01, 0.01}))
+      << optimized_hlo_string;
 }
+
+INSTANTIATE_TEST_SUITE_P(AllTypes, RaggedDotFusionRewriterIntegrationTest,
+                         ::testing::ValuesIn(kbf16f16));
 }  // namespace
 }  // namespace gpu
 }  // namespace xla

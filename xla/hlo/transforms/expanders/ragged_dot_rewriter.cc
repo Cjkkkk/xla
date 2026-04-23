@@ -419,19 +419,16 @@ absl::StatusOr<bool> RaggedDotRewriter::RunImpl(
         // Only ragged-dot that cannot be lowered through Gpublaslt
         // GroupGemm or cuDNN fusion are added to the list of operations to
         // rewrite in regular dot.
-        if (ragged_dot_fusion_enabled) {
-          if (!CanBeHandledByCuDNNFusion(instruction)) {
-            ragged_dots.push_back(Cast<HloRaggedDotInstruction>(instruction));
-          }
-        } else if (has_grouped_gemm) {
-          if (!gpu_compute_capability_.has_value() ||
-              !CanBeHandledByGpublasltGroupGemm(gpu_compute_capability_.value(),
-                                                instruction)) {
-            ragged_dots.push_back(Cast<HloRaggedDotInstruction>(instruction));
-          }
-        } else {
-          ragged_dots.push_back(Cast<HloRaggedDotInstruction>(instruction));
+        if (ragged_dot_fusion_enabled &&
+            CanBeHandledByCuDNNFusion(instruction)) {
+          continue;
         }
+        if (has_grouped_gemm && gpu_compute_capability_.has_value() &&
+            CanBeHandledByGpublasltGroupGemm(gpu_compute_capability_.value(),
+                                             instruction)) {
+          continue;
+        }
+        ragged_dots.push_back(Cast<HloRaggedDotInstruction>(instruction));
       }
     }
   }

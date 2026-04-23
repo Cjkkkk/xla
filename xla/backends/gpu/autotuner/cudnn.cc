@@ -117,20 +117,9 @@ bool IsSupportedCudnnFusion(const HloInstruction& instr,
                             se::StreamExecutor* stream_executor,
                             const DebugOptions& debug_options) {
   const HloComputation* computation = instr.fused_instructions_computation();
-  const HloInstruction* hero =
-      hlo_query::GetFirstInstructionWithOpcode(*computation, HloOpcode::kDot);
-  if (hero == nullptr) {
-    hero = hlo_query::GetFirstInstructionWithOpcode(*computation,
-                                                    HloOpcode::kConvolution);
-  }
-  if (hero == nullptr) {
-    hero = hlo_query::GetFirstInstructionWithOpcode(*computation,
-                                                    HloOpcode::kScaledDot);
-  }
-  if (hero == nullptr) {
-    hero = hlo_query::GetFirstInstructionWithOpcode(*computation,
-                                                    HloOpcode::kRaggedDot);
-  }
+  const HloInstruction* hero = hlo_query::GetFirstInstructionWithOpcode(
+      *computation, {HloOpcode::kDot, HloOpcode::kConvolution,
+                     HloOpcode::kScaledDot, HloOpcode::kRaggedDot});
   if (hero == nullptr) {
     VLOG(1) << "Fusion does not contain a dot or convolution.";
     return false;
