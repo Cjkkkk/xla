@@ -992,7 +992,6 @@ class CuDnnFusionVisitor : public DfsHloRewriteVisitor {
                               {fingerprint_without_workspace, workspace_size});
       TF_RETURN_IF_ERROR(add_workspace(workspace_size));
       TF_ASSIGN_OR_RETURN(const std::string serialized, serialize_graph(graph));
-      std::cerr << serialized << "\n";
       compilation_results_[emitters::GetComputationFingerprint(
           hlo->fused_instructions_computation(), {})] = serialized;
     } else {
