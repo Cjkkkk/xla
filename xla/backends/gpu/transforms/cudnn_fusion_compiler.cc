@@ -935,11 +935,11 @@ absl::StatusOr<std::optional<se::gpu::CudnnGraph>> HloFusionToCuDnnGraph(
   }
 
   std::optional<Result> dims = std::nullopt;
-  if (conv_adapter.has_value())
+  if (conv_adapter.has_value()) {
     dims = conv_adapter->DimensionsAndStrides(*output);
-  else if (ragged_dot_adapter.has_value())
+  } else if (ragged_dot_adapter.has_value()) {
     dims = ragged_dot_adapter->DimensionsAndStrides(*output);
-  else {
+  } else {
     dims = gemm_adapter->DimensionsAndStrides(
         *output, TritonFusionAnalysis::Scope::OUTPUT);
   }

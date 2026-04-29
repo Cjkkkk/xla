@@ -167,7 +167,6 @@ class RaggedDotFusionRewriterIntegrationTest
     print_opts.set_print_operand_shape(false);
     return module->ToString(print_opts);
   }
-
 };
 
 TEST_P(RaggedDotFusionRewriterIntegrationTest, TestRaggedDotOnly) {
@@ -175,7 +174,8 @@ TEST_P(RaggedDotFusionRewriterIntegrationTest, TestRaggedDotOnly) {
     GTEST_SKIP() << "CuDNN ragged dot requires cuDNN 9.21+.";
   }
 
-  const std::string hlo_with_new_type = absl::StrReplaceAll(R"(
+  const std::string hlo_with_new_type =
+      absl::StrReplaceAll(R"(
     HloModule Test
 
     ENTRY Test {
@@ -185,7 +185,7 @@ TEST_P(RaggedDotFusionRewriterIntegrationTest, TestRaggedDotOnly) {
       ROOT rd = TYPE[128,256]{1,0} ragged-dot(input, weight, group_sizes),
              lhs_contracting_dims={1}, rhs_contracting_dims={1}, lhs_ragged_dims={0}, rhs_group_dims={0}
     })",
-                                                             {{"TYPE", GetParam()}});
+                          {{"TYPE", GetParam()}});
   std::string optimized_hlo_string = GetOptimizedHlo(hlo_with_new_type);
   EXPECT_THAT(optimized_hlo_string, HasSubstr(kCuDnnFusionKind));
 
